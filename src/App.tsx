@@ -6,17 +6,16 @@
  *      custom task categories, archive viewer.
  */
 
-import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Timer, ListTodo, Trello, Flame, BarChart3, Home,
   Play, Pause, RotateCcw, Plus, ChevronRight, ChevronLeft,
   CheckCircle2, Circle, Clock, AlertCircle, BookOpen,
   Search, Briefcase, X, Trash2, GripVertical,
-  Coffee, Brain, Zap, Wallet, Settings, Tag, Archive,
-  LogIn, LogOut, User, Hash, SlidersHorizontal,
+  Coffee, Brain, Zap, Wallet, Tag, Archive,
+  LogIn, LogOut, User, Hash,
   RefreshCw, Pencil, Check, ArrowUpCircle, ArrowDownCircle,
-  ChevronDown, ChevronUp, Flame as FlameIcon
 } from 'lucide-react';
 import {
   AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell,
@@ -25,7 +24,27 @@ import {
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 
-// ─── Utilities ────────────────────────────────────────────────────────────────
+// ─── Error Boundary ───────────────────────────────────────────────────────────
+class ErrorBoundary extends React.Component<{children:React.ReactNode},{error:Error|null}> {
+  state = { error: null };
+  static getDerivedStateFromError(e: Error) { return { error: e }; }
+  render() {
+    if (this.state.error) return (
+      <div style={{padding:'2rem',fontFamily:'monospace'}}>
+        <h2 style={{color:'red',marginBottom:'1rem'}}>⚠️ Lỗi render component</h2>
+        <pre style={{fontSize:'12px',background:'#f4f4f4',padding:'1rem',borderRadius:'8px',whiteSpace:'pre-wrap'}}>
+          {(this.state.error as Error).message}
+        </pre>
+        <button onClick={()=>this.setState({error:null})} style={{marginTop:'1rem',padding:'8px 16px',background:'#000',color:'#fff',border:'none',borderRadius:'8px',cursor:'pointer'}}>
+          Thử lại
+        </button>
+      </div>
+    );
+    return this.props.children;
+  }
+}
+
+
 function cn(...inputs: ClassValue[]) { return twMerge(clsx(inputs)); }
 
 function useLocalStorage<T>(key: string, initial: T) {
@@ -582,7 +601,7 @@ function EditTaskModal({ task, categories, onSave, onClose }: {
   task:Task; categories:string[]; onSave:(t:Task)=>void; onClose:()=>void;
 }) {
   const [t, setT] = useState({...task});
-  const [tagInput, setTagInput] = useState(task.tags.join(' '));
+  const [tagInput, setTagInput] = useState((task.tags??[]).join(' '));
 
   const save = () => {
     const tags = tagInput.split(/[\s,]+/).filter(s=>s.startsWith('#')).map(s=>s.toLowerCase());
@@ -729,14 +748,15 @@ function TaskListPage({ tasks, setTasks, categories, onTaskDone }: {
 
   const allTags = useMemo(() => {
     const s = new Set<string>();
-    tasks.forEach(t => t.tags.forEach(g => s.add(g)));
+    tasks.forEach(t => (t.tags ?? []).forEach(g => s.add(g)));
     return [...s].sort();
   }, [tasks]);
 
   const filtered = useMemo(() => tasks.filter(t => {
-    const matchSearch = t.title.toLowerCase().includes(search.toLowerCase()) || t.tags.some(g=>g.includes(search.toLowerCase()));
+    const tags = t.tags ?? [];
+    const matchSearch = t.title.toLowerCase().includes(search.toLowerCase()) || tags.some(g=>g.includes(search.toLowerCase()));
     const matchCat = filterMode==='cat' ? (activeCat==='All' || t.category===activeCat) : true;
-    const matchTag = filterMode==='tag' ? t.tags.includes(activeTag) : true;
+    const matchTag = filterMode==='tag' ? tags.includes(activeTag) : true;
     return matchSearch && matchCat && matchTag;
   }), [tasks, search, activeCat, activeTag, filterMode]);
 
@@ -830,9 +850,9 @@ function TaskListPage({ tasks, setTasks, categories, onTaskDone }: {
               <div>
                 <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest mb-1">{task.category}</p>
                 <h3 className={cn('text-base font-bold leading-snug',task.status==='done'&&'line-through')}>{task.title}</h3>
-                {task.tags.length>0 && (
+                {(task.tags??[]).length>0 && (
                   <div className="flex gap-1 flex-wrap mt-2">
-                    {task.tags.map(tag => (
+                    {(task.tags??[]).map(tag => (
                       <span key={tag} className="bg-white/60 text-zinc-600 px-2 py-0.5 rounded-lg text-[10px] font-bold">{tag}</span>
                     ))}
                   </div>
@@ -950,9 +970,9 @@ function KanbanPage({ tasks, setTasks, archivedTasks, setArchivedTasks }: {
                   <GripVertical className="w-4 h-4 text-zinc-300"/>
                 </div>
                 <p className="text-sm font-bold leading-snug mb-2">{task.title}</p>
-                {task.tags.length>0 && (
+                {(task.tags??[]).length>0 && (
                   <div className="flex gap-1 flex-wrap mb-2">
-                    {task.tags.map(tag=><span key={tag} className="bg-zinc-100 text-zinc-500 px-1.5 py-0.5 rounded text-[9px] font-bold">{tag}</span>)}
+                    {(task.tags??[]).map(tag=><span key={tag} className="bg-zinc-100 text-zinc-500 px-1.5 py-0.5 rounded text-[9px] font-bold">{tag}</span>)}
                   </div>
                 )}
                 <div className="flex items-center gap-1 text-[9px] font-bold text-zinc-400"><Clock className="w-3 h-3"/>{task.deadline}</div>
@@ -1467,13 +1487,13 @@ export default function App() {
             initial={{opacity:0,x:12}} animate={{opacity:1,x:0}}
             exit={{opacity:0,x:-12}} transition={{duration:0.2,ease:'easeInOut'}}
             className="min-h-screen">
-            {activePage==='home'     && <HomePage tasks={tasks} habits={habits} setHabits={setHabits} finance={finance} setActivePage={setActivePage}/>}
-            {activePage==='pomodoro' && <PomodoroPage settings={settings} setSettings={setSettings}/>}
-            {activePage==='tasks'    && <TaskListPage tasks={tasks} setTasks={setTasks} categories={allCategories} onTaskDone={handleTaskDone}/>}
-            {activePage==='kanban'   && <KanbanPage tasks={tasks} setTasks={setTasks} archivedTasks={archived} setArchivedTasks={setArchived}/>}
-            {activePage==='habits'   && <HabitTrackerPage habits={habits} setHabits={setHabits}/>}
-            {activePage==='finance'  && <FinancePage finance={finance} setFinance={setFinance}/>}
-            {activePage==='stats'    && <StatisticsPage tasks={tasks}/>}
+            {activePage==='home'     && <ErrorBoundary><HomePage tasks={tasks} habits={habits} setHabits={setHabits} finance={finance} setActivePage={setActivePage}/></ErrorBoundary>}
+            {activePage==='pomodoro' && <ErrorBoundary><PomodoroPage settings={settings} setSettings={setSettings}/></ErrorBoundary>}
+            {activePage==='tasks'    && <ErrorBoundary><TaskListPage tasks={tasks} setTasks={setTasks} categories={allCategories} onTaskDone={handleTaskDone}/></ErrorBoundary>}
+            {activePage==='kanban'   && <ErrorBoundary><KanbanPage tasks={tasks} setTasks={setTasks} archivedTasks={archived} setArchivedTasks={setArchived}/></ErrorBoundary>}
+            {activePage==='habits'   && <ErrorBoundary><HabitTrackerPage habits={habits} setHabits={setHabits}/></ErrorBoundary>}
+            {activePage==='finance'  && <ErrorBoundary><FinancePage finance={finance} setFinance={setFinance}/></ErrorBoundary>}
+            {activePage==='stats'    && <ErrorBoundary><StatisticsPage tasks={tasks}/></ErrorBoundary>}
           </motion.div>
         </AnimatePresence>
       </main>
