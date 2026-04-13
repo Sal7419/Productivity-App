@@ -178,15 +178,6 @@ const INIT_NOTES: Note[] = [
     {id:'b9',type:'checkbox',content:'Bánh mì',checked:true},
   ]},
 ];
-  completionRate=[
-    {name:'T2',completed:5,planned:8},{name:'T3',completed:7,planned:7},{name:'T4',completed:4,planned:10},
-    {name:'T5',completed:8,planned:9},{name:'T6',completed:6,planned:6},{name:'T7',completed:3,planned:4},{name:'CN',completed:2,planned:2},
-  ];
-  weeklyData=[
-    {name:'Tuần 1',created:20,completed:15},{name:'Tuần 2',created:25,completed:22},
-    {name:'Tuần 3',created:18,completed:20},{name:'Tuần 4',created:30,completed:25},
-  ];
-};
 
 // ─── Accent CSS ───────────────────────────────────────────────────────────────
 function useAccentCSS(color: string) {
