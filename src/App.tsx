@@ -84,13 +84,17 @@ async function sbRegister(email: string, pw: string) {
 async function sbLogin(email: string, pw: string) {
   return sbFetch('/auth/v1/token?grant_type=password',{method:'POST',body:JSON.stringify({email,password:pw})});
 }
+async function sbRefresh(refreshToken: string) {
+  return sbFetch('/auth/v1/token?grant_type=refresh_token',{method:'POST',body:JSON.stringify({refresh_token:refreshToken})});
+}
 async function sbGetData(token: string, uid: string) {
   const rows = await sbFetch(`/rest/v1/profiles?id=eq.${uid}&select=data`,{},token);
   return (Array.isArray(rows)?rows[0]?.data:null)??null;
 }
 async function sbSetData(token: string, uid: string, data: object) {
   await sbFetch('/rest/v1/profiles',{
-    method:'POST', headers:{'Prefer':'resolution=merge-duplicates'},
+    method:'POST',
+    headers:{'Prefer':'resolution=merge-duplicates'},
     body:JSON.stringify({id:uid,data,updated_at:new Date().toISOString()}),
   },token);
 }
@@ -102,7 +106,7 @@ interface Task { id:string;title:string;status:Status;priority:Priority;category
 interface Habit{ id:string;name:string;streak:number;completed:boolean[];group:'study'|'life'; }
 interface Transaction{ id:string;type:'income'|'expense'|'reward';amount:number;note:string;date:string;taskTitle?:string; }
 interface FinanceState{ rewardPerTask:number;transactions:Transaction[]; }
-interface AuthUser{ email:string;token:string;userId:string; }
+interface AuthUser{ email:string;token:string;userId:string;refreshToken:string;expiresAt:number; }
 interface AppSettings{ accentColor:string;pomoDurations:{work:number;short:number;long:number};customCategories:string[]; }
 interface ScheduleEvent{ id:string;title:string;startTime:string;endTime:string;days:number[];color:string;note:string; }
 type NoteBlockType='text'|'checkbox'|'bullet';
@@ -178,6 +182,15 @@ const INIT_NOTES: Note[] = [
     {id:'b9',type:'checkbox',content:'Bánh mì',checked:true},
   ]},
 ];
+  completionRate:[
+    {name:'T2',completed:5,planned:8},{name:'T3',completed:7,planned:7},{name:'T4',completed:4,planned:10},
+    {name:'T5',completed:8,planned:9},{name:'T6',completed:6,planned:6},{name:'T7',completed:3,planned:4},{name:'CN',completed:2,planned:2},
+  ],
+  weeklyData:[
+    {name:'Tuần 1',created:20,completed:15},{name:'Tuần 2',created:25,completed:22},
+    {name:'Tuần 3',created:18,completed:20},{name:'Tuần 4',created:30,completed:25},
+  ],
+};
 
 // ─── Accent CSS ───────────────────────────────────────────────────────────────
 function useAccentCSS(color: string) {
@@ -237,11 +250,11 @@ function Sidebar({activePage,setActivePage,settings,setSettings,user,onLogout,on
    user:AuthUser|null;onLogout:()=>void;onSyncClick:()=>void;syncing:boolean;}) {
   return (
     <aside className="hidden md:flex w-56 h-screen bg-sidebar-dark text-zinc-400 p-4 flex-col gap-4 sticky top-0 z-50 shrink-0 overflow-y-auto no-scrollbar">
-      <div className="flex items-center gap-2.5 mb-1">
-        <div className="w-8 h-8 rounded-xl flex items-center justify-center shrink-0" style={{backgroundColor:'var(--ac)'}}>
+      <div className="flex items-center gap-2.5 mb-1 cursor-pointer" onClick={()=>setActivePage('home')}>
+        <div className="w-8 h-8 rounded-xl flex items-center justify-center shrink-0 hover:opacity-80 transition-opacity" style={{backgroundColor:'var(--ac)'}}>
           <CheckCircle2 className="w-4 h-4 text-white"/>
         </div>
-        <span className="text-lg font-bold text-white tracking-tight">chance</span>
+        <span className="text-lg font-bold text-white tracking-tight hover:opacity-80 transition-opacity">chance</span>
       </div>
       <nav className="flex flex-col gap-1">
         {NAV_ITEMS.map(item=>(
@@ -286,7 +299,7 @@ function Sidebar({activePage,setActivePage,settings,setSettings,user,onLogout,on
   );
 }
 
-function BottomNav({activePage,setActivePage}:{activePage:string;setActivePage:(p:string)=>void}) {
+function BottomNav({activePage,setActivePage,user,onSyncClick}:{activePage:string;setActivePage:(p:string)=>void;user:AuthUser|null;onSyncClick:()=>void}) {
   return (
     <nav className="md:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-zinc-100 z-50 flex overflow-x-auto no-scrollbar">
       {NAV_ITEMS.map(item=>(
@@ -296,6 +309,12 @@ function BottomNav({activePage,setActivePage}:{activePage:string;setActivePage:(
           <span className="text-[8px] font-semibold">{item.label}</span>
         </button>
       ))}
+      {/* Mobile login/sync button */}
+      <button onClick={onSyncClick}
+        className={cn('flex-1 min-w-[44px] flex flex-col items-center gap-0.5 py-2 transition-colors',user?'text-emerald-500':'text-zinc-400')}>
+        <User className="w-4 h-4"/>
+        <span className="text-[8px] font-semibold">{user?'Sync':'Login'}</span>
+      </button>
     </nav>
   );
 }
@@ -311,14 +330,16 @@ function AuthModal({onClose,onLogin}:{onClose:()=>void;onLogin:(u:AuthUser)=>voi
 
   const submit=async()=>{
     if(!email.trim()||!password.trim()){setError('Vui lòng điền đầy đủ thông tin.');return;}
-    if(noSB){setError('Chưa cấu hình Supabase. Xem hướng dẫn bên dưới.');return;}
+    if(noSB){setError('Chưa cấu hình Supabase. Xem SETUP_SUPABASE.md.');return;}
     setLoading(true);setError('');
     try {
       const data=tab==='register'?await sbRegister(email,password):await sbLogin(email,password);
       const token=data.access_token;
+      const refreshToken=data.refresh_token??'';
       const userId=data.user?.id??data.id;
+      const expiresAt=Date.now()+(data.expires_in??3600)*1000;
       if(!token||!userId) throw new Error(data.error_description??data.msg??'Đăng nhập thất bại.');
-      onLogin({email:data.user?.email??email,token,userId});
+      onLogin({email:data.user?.email??email,token,userId,refreshToken,expiresAt});
       onClose();
     } catch(e:any){setError(e.message??'Đã có lỗi.');}
     finally{setLoading(false);}
@@ -461,7 +482,11 @@ function PomodoroPage({settings,setSettings}:{settings:AppSettings;setSettings:(
   useEffect(()=>{
     if(intRef.current)clearInterval(intRef.current);
     if(isActive&&timeLeft>0)intRef.current=setInterval(()=>setTimeLeft(t=>t-1),1000);
-    else if(isActive&&timeLeft===0){setIsActive(false);if(mode==='work')setSessions(s=>s+1);}
+    else if(isActive&&timeLeft===0){
+      setIsActive(false);
+      playBell();
+      if(mode==='work')setSessions(s=>s+1);
+    }
     return()=>{if(intRef.current)clearInterval(intRef.current);};
   },[isActive,timeLeft,mode,setSessions]);
   useEffect(()=>{if(!isActive)setTimeLeft(dur[mode]);},[dur,mode]);
@@ -521,28 +546,105 @@ function PomodoroPage({settings,setSettings}:{settings:AppSettings;setSettings:(
   );
 }
 
-// ─── Deadline Bar ─────────────────────────────────────────────────────────────
+// ─── Audio bell ───────────────────────────────────────────────────────────────
+function playBell() {
+  try {
+    const ctx=new (window.AudioContext||(window as any).webkitAudioContext)();
+    [[880,0],[660,0.15],[440,0.35]].forEach(([freq,delay])=>{
+      const osc=ctx.createOscillator(),gain=ctx.createGain();
+      osc.connect(gain);gain.connect(ctx.destination);
+      osc.frequency.value=freq;osc.type='sine';
+      gain.gain.setValueAtTime(0.4,ctx.currentTime+delay);
+      gain.gain.exponentialRampToValueAtTime(0.001,ctx.currentTime+delay+1);
+      osc.start(ctx.currentTime+delay);osc.stop(ctx.currentTime+delay+1.1);
+    });
+  }catch{}
+}
+
+
 function DeadlineBar({createdAt,deadline}:{createdAt:string;deadline:string}) {
   const start=new Date(createdAt).getTime(),end=new Date(deadline).getTime(),now=Date.now();
   const pct=Math.min(100,Math.max(0,((now-start)/(end-start))*100));
   const dLeft=Math.ceil((end-now)/86400000);
-  const isOver=now>end,isNear=!isOver&&dLeft<=2;
+  const isOver=now>end,isNear=!isOver&&dLeft<=2,isToday=!isOver&&dLeft===0;
   const barColor=isOver?'#ef4444':isNear?'#f97316':'var(--ac)';
-  const label=isOver?`Quá hạn ${Math.abs(dLeft)} ngày`:dLeft===0?'Hết hạn hôm nay!':`Còn ${dLeft} ngày`;
+  const label=isOver?`Quá hạn ${Math.abs(dLeft)} ngày`:isToday?'Hết hạn hôm nay!':`Còn ${dLeft} ngày`;
+  const flameSize=isOver?22:isToday?20:isNear?16:12;
   return (
     <div className="w-full mt-1">
-      <div className="w-full h-2 bg-white/50 rounded-full relative overflow-visible">
+      <div className="w-full h-2 bg-white/50 rounded-full relative overflow-visible flex items-center">
         <div className="h-full rounded-full transition-all duration-1000" style={{width:`${pct}%`,backgroundColor:barColor}}/>
-        <div className={cn('absolute top-1/2 w-3.5 h-3.5 rounded-full border-2 border-white -translate-y-1/2 shadow',isOver?'pulsered':isNear?'shake':'')}
-          style={{left:`calc(${pct}% - 7px)`,backgroundColor:barColor}}/>
+        <span
+          className={cn('absolute -translate-y-1/2 transition-all duration-500 leading-none select-none',isOver?'pulsered':isNear?'animate-bounce':'')}
+          style={{left:`calc(${Math.min(pct,95)}% - ${flameSize/2}px)`,fontSize:`${flameSize}px`,top:'50%'}}>
+          {isOver?'💀':'🔥'}
+        </span>
       </div>
-      <p className={cn('text-[10px] font-bold mt-1.5',isOver?'text-red-500':isNear?'text-orange-500':'text-zinc-400')}>{label}</p>
+      <p className={cn('text-[10px] font-bold mt-2',isOver?'text-red-500':isNear||isToday?'text-orange-500':'text-zinc-400')}>{label}</p>
+    </div>
+  );
+}
+
+// ─── TagInput with suggestions ────────────────────────────────────────────────
+function TagInput({value,onChange,allTags,placeholder='#hashtag1 #hashtag2'}:{
+  value:string;onChange:(v:string)=>void;allTags:string[];placeholder?:string;
+}) {
+  const [open,setOpen]=useState(false);
+  const ref=useRef<HTMLDivElement>(null);
+
+  // Close on outside click
+  useEffect(()=>{
+    const h=(e:MouseEvent)=>{if(ref.current&&!ref.current.contains(e.target as Node))setOpen(false);};
+    document.addEventListener('mousedown',h);
+    return()=>document.removeEventListener('mousedown',h);
+  },[]);
+
+  // Tags already in the input
+  const existingTags=value.split(/[\s,]+/).filter(s=>s.startsWith('#'));
+
+  // Filter suggestions: allTags not already typed, match current partial word
+  const lastWord=value.split(/\s+/).at(-1)??'';
+  const suggestions=allTags.filter(t=>
+    !existingTags.includes(t) &&
+    (lastWord===''||lastWord===' '||(lastWord.startsWith('#')&&t.includes(lastWord.slice(1))))
+  );
+
+  const pickTag=(tag:string)=>{
+    // Replace the partial last word with the full tag
+    const parts=value.split(/\s+/);
+    const lastPart=parts.at(-1)??'';
+    if(lastPart.startsWith('#')) parts[parts.length-1]=tag;
+    else parts.push(tag);
+    onChange(parts.join(' ')+' ');
+    setOpen(false);
+  };
+
+  return (
+    <div ref={ref} className="relative">
+      <input type="text" placeholder={placeholder} value={value}
+        onChange={e=>{onChange(e.target.value);setOpen(true);}}
+        onFocus={()=>setOpen(true)}
+        className="w-full bg-zinc-50 border-2 border-zinc-100 rounded-2xl px-4 py-3 font-semibold text-sm outline-none focus:border-black"/>
+      <AnimatePresence>
+        {open&&suggestions.length>0&&(
+          <motion.div initial={{opacity:0,y:-4}} animate={{opacity:1,y:0}} exit={{opacity:0,y:-4}}
+            className="absolute top-full left-0 right-0 mt-1 bg-white border border-zinc-100 rounded-2xl shadow-xl z-50 overflow-hidden max-h-40 overflow-y-auto no-scrollbar">
+            {suggestions.slice(0,10).map(tag=>(
+              <button key={tag} onMouseDown={e=>{e.preventDefault();pickTag(tag);}}
+                className="w-full text-left px-4 py-2.5 text-sm font-bold hover:bg-zinc-50 transition-colors flex items-center gap-2">
+                <Hash className="w-3.5 h-3.5 text-zinc-400 shrink-0"/>
+                {tag}
+              </button>
+            ))}
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
 
 // ─── Task Modals ──────────────────────────────────────────────────────────────
-function EditTaskModal({task,categories,onSave,onClose}:{task:Task;categories:string[];onSave:(t:Task)=>void;onClose:()=>void}) {
+function EditTaskModal({task,categories,allTags,onSave,onClose}:{task:Task;categories:string[];allTags:string[];onSave:(t:Task)=>void;onClose:()=>void}) {
   const [t,setT]=useState({...task});
   const [tagInput,setTagInput]=useState((task.tags??[]).join(' '));
   const save=()=>{
@@ -572,7 +674,7 @@ function EditTaskModal({task,categories,onSave,onClose}:{task:Task;categories:st
             </div>
           </div>
           <input type="date" value={t.deadline} onChange={e=>setT({...t,deadline:e.target.value})} className="w-full bg-zinc-50 border-2 border-zinc-100 rounded-2xl px-4 py-3 font-semibold outline-none focus:border-black"/>
-          <input type="text" placeholder="#hashtag1 #hashtag2" value={tagInput} onChange={e=>setTagInput(e.target.value)} className="w-full bg-zinc-50 border-2 border-zinc-100 rounded-2xl px-4 py-3 font-semibold text-sm outline-none focus:border-black"/>
+          <TagInput value={tagInput} onChange={setTagInput} allTags={allTags}/>
           <div className="flex gap-2">
             {(['todo','in-progress','done']as Status[]).map(s=>(
               <button key={s} onClick={()=>setT({...t,status:s})} className={cn('flex-1 py-2 rounded-xl text-xs font-bold transition-all',t.status===s?'bg-black text-white':'bg-zinc-50 text-zinc-500 hover:bg-zinc-100')}>
@@ -587,7 +689,7 @@ function EditTaskModal({task,categories,onSave,onClose}:{task:Task;categories:st
   );
 }
 
-function AddTaskModal({categories,onAdd,onClose}:{categories:string[];onAdd:(t:Task)=>void;onClose:()=>void}) {
+function AddTaskModal({categories,allTags,onAdd,onClose}:{categories:string[];allTags:string[];onAdd:(t:Task)=>void;onClose:()=>void}) {
   const [title,setTitle]=useState('');
   const [priority,setPriority]=useState<Priority>('medium');
   const [category,setCategory]=useState(categories[0]??'Study');
@@ -618,7 +720,7 @@ function AddTaskModal({categories,onAdd,onClose}:{categories:string[];onAdd:(t:T
             </div>
           </div>
           <input type="date" value={deadline} onChange={e=>setDeadline(e.target.value)} className="w-full bg-zinc-50 border-2 border-zinc-100 rounded-2xl px-4 py-3 font-semibold outline-none focus:border-black"/>
-          <input type="text" placeholder="#hashtag1 #hashtag2" value={tagInput} onChange={e=>setTagInput(e.target.value)} className="w-full bg-zinc-50 border-2 border-zinc-100 rounded-2xl px-4 py-3 font-semibold text-sm outline-none focus:border-black"/>
+          <TagInput value={tagInput} onChange={setTagInput} allTags={allTags}/>
         </div>
         <button onClick={submit} className="mt-5 w-full bg-black text-white py-3.5 rounded-2xl font-bold hover:bg-zinc-800">Thêm task</button>
       </motion.div>
@@ -727,8 +829,8 @@ function TaskListPage({tasks,setTasks,categories,onTaskDone,onTaskUndo}:{
       </div>
       {filtered.length===0&&<div className="flex flex-col items-center py-20 text-zinc-300"><Circle className="w-14 h-14 mb-3 opacity-30"/><p className="font-bold">Không có task nào</p></div>}
       <AnimatePresence>
-        {showAdd&&<AddTaskModal categories={categories} onAdd={t=>{setTasks([t,...tasks]);setShowAdd(false);}} onClose={()=>setShowAdd(false)}/>}
-        {editTask&&<EditTaskModal task={editTask} categories={categories} onSave={u=>setTasks(tasks.map(t=>t.id===u.id?u:t))} onClose={()=>setEditTask(null)}/>}
+        {showAdd&&<AddTaskModal categories={categories} allTags={allTags} onAdd={t=>{setTasks([t,...tasks]);setShowAdd(false);}} onClose={()=>setShowAdd(false)}/>}
+        {editTask&&<EditTaskModal task={editTask} categories={categories} allTags={allTags} onSave={u=>setTasks(tasks.map(t=>t.id===u.id?u:t))} onClose={()=>setEditTask(null)}/>}
       </AnimatePresence>
     </div>
   );
@@ -816,9 +918,10 @@ function KanbanPage({tasks,setTasks,archived,setArchived}:{tasks:Task[];setTasks
             const isSel=selDay===d;
             return (
               <button key={d} onClick={()=>setSelDay(isSel?null:d)}
-                className={cn('h-11 md:h-14 p-1.5 rounded-xl border transition-all flex flex-col text-left',isSel?'border-2 ring-2 ring-black/20':isToday?'bg-black border-black':t4d.length>0?'bg-red-50 border-red-100':'bg-zinc-50/50 border-transparent hover:bg-zinc-100')}>
-                <span className={cn('text-xs font-bold',isToday?'text-white':t4d.length>0?'text-red-500':'text-zinc-500')}>{d}</span>
-                {t4d.length>0&&!isToday&&<div className="mt-auto w-1.5 h-1.5 bg-red-500 rounded-full animate-pulse"/>}
+                className={cn('h-11 md:h-14 p-1.5 rounded-xl border transition-all flex flex-col text-left',
+                  isSel?'border-2 ring-2 ring-black/20 bg-zinc-100':isToday?'bg-black border-black':t4d.length>0?'bg-red-50 border-red-100':'bg-zinc-50/50 border-transparent hover:bg-zinc-100')}>
+                <span className={cn('text-xs font-bold',isSel&&isToday?'text-white':isToday?'text-white':isSel?'text-black':t4d.length>0?'text-red-500':'text-zinc-500')}>{d}</span>
+                {t4d.length>0&&<div className={cn('mt-auto w-1.5 h-1.5 rounded-full animate-pulse',isToday?'bg-orange-400':'bg-red-500')}/>}
               </button>
             );
           })}
@@ -917,10 +1020,10 @@ function HabitTrackerPage({habits,setHabits}:{habits:Habit[];setHabits:(h:Habit[
 }
 
 // ─── Schedule Page ────────────────────────────────────────────────────────────
-const HOUR_H=56;const START_H=6;const END_H=22;
+const HOUR_H=52;const START_H=0;const END_H=24;
 const HOURS=Array.from({length:END_H-START_H},(_,i)=>START_H+i);
 function parseTime(t:string):number{const[h,m]=t.split(':').map(Number);return h*60+m;}
-function eventTop(e:ScheduleEvent):number{return(parseTime(e.startTime)-START_H*60)/60*HOUR_H;}
+function eventTop(e:ScheduleEvent):number{return parseTime(e.startTime)/60*HOUR_H;}
 function eventHeight(e:ScheduleEvent):number{return Math.max(8,(parseTime(e.endTime)-parseTime(e.startTime))/60*HOUR_H);}
 
 function EventModal({event,onSave,onDelete,onClose}:{event:ScheduleEvent|null;onSave:(e:ScheduleEvent)=>void;onDelete:(id:string)=>void;onClose:()=>void}) {
@@ -973,6 +1076,16 @@ function SchedulePage({events,setEvents}:{events:ScheduleEvent[];setEvents:(e:Sc
   const [showAdd,setShowAdd]=useState(false);
   const [editEv,setEditEv]=useState<ScheduleEvent|null>(null);
   const [selDay,setSelDay]=useState(todayIndex());
+  const scrollRef=useRef<HTMLDivElement>(null);
+
+  // Scroll to current hour on mount
+  useEffect(()=>{
+    if(viewMode==='grid'&&scrollRef.current){
+      const h=new Date().getHours();
+      const top=Math.max(0,(h-1)*HOUR_H-40);
+      scrollRef.current.scrollTo({top,behavior:'smooth'});
+    }
+  },[viewMode]);
 
   const eventsForDay=(day:number)=>events.filter(e=>e.days.includes(day)).sort((a,b)=>parseTime(a.startTime)-parseTime(b.startTime));
 
@@ -994,12 +1107,12 @@ function SchedulePage({events,setEvents}:{events:ScheduleEvent[];setEvents:(e:Sc
 
       {/* GRID VIEW */}
       {viewMode==='grid'&&(
-        <div className="overflow-x-auto no-scrollbar">
-          <div style={{minWidth:'640px'}}>
-            <div className="flex mb-1" style={{paddingLeft:'44px'}}>
+        <div ref={scrollRef} className="overflow-auto" style={{maxHeight:'calc(100vh - 180px)',scrollBehavior:'smooth'}}>
+          <div style={{minWidth:'560px'}}>
+            <div className="flex sticky top-0 z-10 bg-bg-chance pb-1 pt-0" style={{paddingLeft:'44px'}}>
               {DAY_SHORT.map((d,i)=>(
                 <div key={d} className={cn('flex-1 text-center text-xs font-bold py-2 rounded-xl mx-0.5',i===todayIndex()?'bg-black text-white':'text-zinc-400')}>
-                  {d}<br/><span className={cn('text-[9px]',i===todayIndex()?'text-zinc-300':'text-zinc-300')}>{DAY_FULL[i].replace('Thứ ','')}</span>
+                  {d}
                 </div>
               ))}
             </div>
@@ -1007,27 +1120,38 @@ function SchedulePage({events,setEvents}:{events:ScheduleEvent[];setEvents:(e:Sc
               <div className="shrink-0" style={{width:'44px'}}>
                 {HOURS.map(h=>(
                   <div key={h} style={{height:`${HOUR_H}px`}} className="flex items-start justify-end pr-2 border-t border-zinc-100 first:border-t-0">
-                    <span className="text-[10px] font-bold text-zinc-400 -translate-y-2">{h}:00</span>
+                    <span className="text-[10px] font-bold text-zinc-400 -translate-y-2">{String(h).padStart(2,'0')}:00</span>
                   </div>
                 ))}
               </div>
               <div className="flex-1 grid gap-0.5" style={{gridTemplateColumns:'repeat(7,1fr)'}}>
-                {[0,1,2,3,4,5,6].map(day=>(
-                  <div key={day} className="relative bg-zinc-50/50 rounded-xl border border-zinc-100" style={{height:`${(END_H-START_H)*HOUR_H}px`}}>
-                    {HOURS.map(h=><div key={h} style={{top:`${(h-START_H)*HOUR_H}px`}} className="absolute left-0 right-0 border-t border-zinc-100/60"/>)}
-                    {eventsForDay(day).map(ev=>{
-                      const top=eventTop(ev),height=eventHeight(ev);
-                      return (
-                        <div key={ev.id} title={`${ev.title}\n${ev.startTime}–${ev.endTime}`} onClick={()=>setEditEv(ev)}
-                          className="absolute left-0.5 right-0.5 rounded-lg px-1 py-0.5 cursor-pointer hover:brightness-95 overflow-hidden"
-                          style={{top:`${top}px`,height:`${Math.max(height,18)}px`,backgroundColor:ev.color}}>
-                          <p className="text-[9px] font-bold text-zinc-700 leading-tight truncate">{ev.title}</p>
-                          {height>26&&<p className="text-[8px] text-zinc-500">{ev.startTime}</p>}
+                {[0,1,2,3,4,5,6].map(day=>{
+                  const nowH=new Date();
+                  const nowTop=(nowH.getHours()*60+nowH.getMinutes())/60*HOUR_H;
+                  const isToday=day===todayIndex();
+                  return (
+                    <div key={day} className="relative bg-zinc-50/50 rounded-xl border border-zinc-100" style={{height:`${END_H*HOUR_H}px`}}>
+                      {HOURS.map(h=><div key={h} style={{top:`${h*HOUR_H}px`}} className="absolute left-0 right-0 border-t border-zinc-100/60"/>)}
+                      {isToday&&(
+                        <div className="absolute left-0 right-0 z-10 flex items-center" style={{top:`${nowTop}px`}}>
+                          <div className="w-2 h-2 rounded-full bg-red-500 shrink-0 -ml-1"/>
+                          <div className="flex-1 h-px bg-red-400"/>
                         </div>
-                      );
-                    })}
-                  </div>
-                ))}
+                      )}
+                      {eventsForDay(day).map(ev=>{
+                        const top=eventTop(ev),height=eventHeight(ev);
+                        return (
+                          <div key={ev.id} title={`${ev.title}\n${ev.startTime}–${ev.endTime}`} onClick={()=>setEditEv(ev)}
+                            className="absolute left-0.5 right-0.5 rounded-lg px-1 py-0.5 cursor-pointer hover:brightness-95 overflow-hidden"
+                            style={{top:`${top}px`,height:`${Math.max(height,18)}px`,backgroundColor:ev.color}}>
+                            <p className="text-[9px] font-bold text-zinc-700 leading-tight truncate">{ev.title}</p>
+                            {height>26&&<p className="text-[8px] text-zinc-500">{ev.startTime}</p>}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })}
               </div>
             </div>
           </div>
@@ -1099,7 +1223,7 @@ function FinancePage({finance,setFinance}:{finance:FinanceState;setFinance:(f:Fi
   const [rewardInput,setRewardInput]=useState(String(finance.rewardPerTask));
 
   const balance=finance.transactions.reduce((a,t)=>t.type==='expense'?a-t.amount:a+t.amount,0);
-  const totalIn=finance.transactions.filter(t=>t.type!=='expense').reduce((a,t)=>a+t.amount,0);
+  const totalIn=finance.transactions.filter(t=>t.type==='income'||t.type==='reward').reduce((a,t)=>a+t.amount,0);
   const totalOut=finance.transactions.filter(t=>t.type==='expense').reduce((a,t)=>a+t.amount,0);
   const totalReward=finance.transactions.filter(t=>t.type==='reward').reduce((a,t)=>a+t.amount,0);
 
@@ -1402,9 +1526,8 @@ function NoteEditor({note,onSave,onDelete,onClose}:{note:Note|null;onSave:(n:Not
 
         {/* Tags + actions */}
         <div className="px-5 py-3 border-t border-black/5 shrink-0">
-          <input type="text" placeholder="#tag1 #tag2 ..." value={tagInput} onChange={e=>setTagInput(e.target.value)}
-            className="w-full bg-black/5 rounded-2xl px-3 py-2 text-xs font-semibold outline-none focus:bg-black/10 transition-all mb-3"/>
-          <div className="flex gap-3">
+          <TagInput value={tagInput} onChange={setTagInput} allTags={[]} placeholder="#tag1 #tag2 ..."/>
+          <div className="flex gap-3 mt-3">
             {!isNew&&<button onClick={()=>onDelete(note!.id)} className="w-10 h-10 bg-red-100 rounded-2xl flex items-center justify-center hover:bg-red-200 shrink-0"><Trash2 className="w-4 h-4 text-red-500"/></button>}
             <button onClick={save} className="flex-1 text-white py-2.5 rounded-2xl font-bold text-sm hover:opacity-90 transition-all" style={{backgroundColor:'var(--ac)'}}>
               {isNew?'Tạo ghi chú':'Lưu thay đổi'}
@@ -1715,26 +1838,71 @@ function StatisticsPage({tasks,habits,finance,onReset}:{tasks:Task[];habits:Habi
 
 
 // ─── Supabase Sync Hook ───────────────────────────────────────────────────────
-function useSupabaseSync(user:AuthUser|null,data:object,setData:(d:any)=>void) {
+function useSupabaseSync(
+  user: AuthUser|null,
+  data: object,
+  setData: (d:any)=>void,
+  setUser: (u:AuthUser|null)=>void,
+) {
   const [syncing,setSyncing]=useState(false);
+  // `ready` = initial pull done; don't push until then to avoid overwriting server data
+  const ready=useRef(false);
   const debRef=useRef<ReturnType<typeof setTimeout>|null>(null);
+  const dataRef=useRef(data);
+  dataRef.current=data;
+
+  // Refresh token if expired (<5 min left)
+  const getValidToken=useCallback(async():Promise<string|null>=>{
+    if(!user)return null;
+    const fiveMin=5*60*1000;
+    if(user.expiresAt>Date.now()+fiveMin) return user.token;
+    if(!user.refreshToken) return user.token;
+    try{
+      const r=await sbRefresh(user.refreshToken);
+      const updated:AuthUser={...user,token:r.access_token,refreshToken:r.refresh_token??user.refreshToken,expiresAt:Date.now()+(r.expires_in??3600)*1000};
+      setUser(updated);
+      return r.access_token;
+    }catch{return user.token;}
+  },[user,setUser]);
 
   const push=useCallback(async(payload:object)=>{
-    if(!user||!SB_URL)return;
-    try{await sbSetData(user.token,user.userId,payload);}catch{}
-  },[user]);
+    if(!user||!SB_URL||!ready.current)return;
+    try{
+      const token=await getValidToken();
+      if(token) await sbSetData(token,user.userId,payload);
+    }catch{}
+  },[user,getValidToken]);
 
   const pull=useCallback(async()=>{
     if(!user||!SB_URL)return;
     setSyncing(true);
-    try{const d=await sbGetData(user.token,user.userId);if(d)setData(d);}
-    catch{}finally{setSyncing(false);}
-  },[user,setData]);
+    try{
+      const token=await getValidToken();
+      if(!token)return;
+      const d=await sbGetData(token,user.userId);
+      if(d) setData(d);
+    }catch{}finally{
+      setSyncing(false);
+      ready.current=true; // allow push after first pull
+    }
+  },[user,setData,getValidToken]);
 
+  // Auto-pull on mount (or when user changes) — this is the KEY fix
+  useEffect(()=>{
+    ready.current=false; // reset on user change
+    if(user&&SB_URL){
+      pull();
+    } else {
+      ready.current=true; // no user → allow push immediately
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[user?.userId]);
+
+  // Debounced auto-push when data changes — only after pull is done
   useEffect(()=>{
     if(!user||!SB_URL)return;
     if(debRef.current)clearTimeout(debRef.current);
-    debRef.current=setTimeout(()=>push(data),3000);
+    debRef.current=setTimeout(()=>{if(ready.current)push(dataRef.current);},2000);
     return()=>{if(debRef.current)clearTimeout(debRef.current);};
   },[data,user,push]);
 
@@ -1771,7 +1939,7 @@ export default function App() {
     addToast('Đồng bộ thành công!','☁️');
   },[setTasks,setHabits,setFinanceRaw,setSettings,setArchived,setSchedule,setNotes,addToast]);
 
-  const {syncing,pull}=useSupabaseSync(user,syncPayload,applyServerData);
+  const {syncing,pull}=useSupabaseSync(user,syncPayload,applyServerData,setUser);
   const setFinance=useCallback((f:FinanceState)=>setFinanceRaw(f),[setFinanceRaw]);
 
   // Task done → earn reward
@@ -1800,8 +1968,9 @@ export default function App() {
   },[setTasks,setHabits,setFinanceRaw,setSettings,setArchived,setSchedule,setNotes,addToast]);
 
   const handleLogin=(u:AuthUser)=>{
-    setUser(u);addToast(`Xin chào, ${u.email}!`,'👋');
-    setTimeout(()=>pull(),500);
+    setUser(u);
+    addToast(`Xin chào, ${u.email}!`,'👋');
+    // pull() called automatically by useSupabaseSync's useEffect when user changes
   };
   const handleLogout=()=>{setUser(null);addToast('Đã đăng xuất','👋');};
 
@@ -1824,7 +1993,7 @@ export default function App() {
           </motion.div>
         </AnimatePresence>
       </main>
-      <BottomNav activePage={activePage} setActivePage={setActivePage}/>
+      <BottomNav activePage={activePage} setActivePage={setActivePage} user={user} onSyncClick={()=>user?pull():setShowAuth(true)}/>
       <ToastContainer toasts={toasts}/>
       <AnimatePresence>{showAuth&&<AuthModal onClose={()=>setShowAuth(false)} onLogin={handleLogin}/>}</AnimatePresence>
     </div>
