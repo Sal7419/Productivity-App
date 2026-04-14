@@ -463,6 +463,7 @@ function PomodoroPage({settings,setSettings}:{settings:AppSettings;setSettings:(
   const [isActive,setIsActive]=useState(false);
   const [sessions,setSessions]=useLocalStorage('pomo-sessions',0);
   const [showCfg,setShowCfg]=useState(false);
+  const [showBell,setShowBell]=useState(false);
   const [draft,setDraft]=useState(settings.pomoDurations);
   const intRef=useRef<ReturnType<typeof setInterval>|null>(null);
   const modeBg:Record<PomMode,string>={work:'bg-bg-chance',short:'bg-emerald-50',long:'bg-indigo-50'};
@@ -476,6 +477,7 @@ function PomodoroPage({settings,setSettings}:{settings:AppSettings;setSettings:(
     else if(isActive&&timeLeft===0){
       setIsActive(false);
       playBell();
+      setShowBell(true);
       if(mode==='work')setSessions(s=>s+1);
     }
     return()=>{if(intRef.current)clearInterval(intRef.current);};
@@ -484,6 +486,7 @@ function PomodoroPage({settings,setSettings}:{settings:AppSettings;setSettings:(
   const fmt=(s:number)=>`${String(Math.floor(s/60)).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`;
   return (
     <div className={cn('flex flex-col items-center justify-center min-h-screen gap-7 p-6 pb-24 md:pb-6 transition-colors duration-700',modeBg[mode])}>
+      <AnimatePresence>{showBell&&<BellFlash onDone={()=>setShowBell(false)}/>}</AnimatePresence>
       <div className="flex gap-2 bg-white/70 p-1.5 rounded-[2rem] shadow-sm flex-wrap justify-center">
         {(Object.keys(dur)as PomMode[]).map(m=>(
           <button key={m} onClick={()=>switchMode(m)}
@@ -541,15 +544,49 @@ function PomodoroPage({settings,setSettings}:{settings:AppSettings;setSettings:(
 function playBell() {
   try {
     const ctx=new (window.AudioContext||(window as any).webkitAudioContext)();
-    [[880,0],[660,0.15],[440,0.35]].forEach(([freq,delay])=>{
+    // Rich bell sequence: ding-ding-ding with harmonics
+    const bellNotes=[
+      {freq:880,delay:0,dur:1.2,vol:0.5},
+      {freq:1108,delay:0.05,dur:1.0,vol:0.3},
+      {freq:1320,delay:0.1,dur:0.8,vol:0.2},
+      {freq:660,delay:0.5,dur:1.2,vol:0.4},
+      {freq:880,delay:0.55,dur:1.0,vol:0.25},
+      {freq:880,delay:1.1,dur:1.5,vol:0.5},
+      {freq:1108,delay:1.15,dur:1.2,vol:0.3},
+    ];
+    bellNotes.forEach(({freq,delay,dur,vol})=>{
       const osc=ctx.createOscillator(),gain=ctx.createGain();
       osc.connect(gain);gain.connect(ctx.destination);
       osc.frequency.value=freq;osc.type='sine';
-      gain.gain.setValueAtTime(0.4,ctx.currentTime+delay);
-      gain.gain.exponentialRampToValueAtTime(0.001,ctx.currentTime+delay+1);
-      osc.start(ctx.currentTime+delay);osc.stop(ctx.currentTime+delay+1.1);
+      gain.gain.setValueAtTime(0,ctx.currentTime+delay);
+      gain.gain.linearRampToValueAtTime(vol,ctx.currentTime+delay+0.01);
+      gain.gain.exponentialRampToValueAtTime(0.001,ctx.currentTime+delay+dur);
+      osc.start(ctx.currentTime+delay);osc.stop(ctx.currentTime+delay+dur+0.05);
     });
+    // Vibrate on mobile if supported
+    if(navigator.vibrate){navigator.vibrate([200,100,200,100,400]);}
   }catch{}
+}
+
+// Bell flash overlay component
+function BellFlash({onDone}:{onDone:()=>void}) {
+  useEffect(()=>{const t=setTimeout(onDone,1800);return()=>clearTimeout(t);},[onDone]);
+  return (
+    <div className="fixed inset-0 z-[500] pointer-events-none flex items-center justify-center">
+      <motion.div initial={{opacity:0,scale:0.5}} animate={{opacity:[0,1,1,0],scale:[0.5,1.2,1,0.8]}}
+        transition={{duration:1.8,times:[0,0.2,0.7,1]}}
+        className="flex flex-col items-center gap-4">
+        <motion.div animate={{rotate:[0,-15,15,-10,10,-5,5,0]}} transition={{duration:0.8,repeat:2}}
+          className="text-7xl select-none">🔔</motion.div>
+        <motion.p initial={{opacity:0,y:10}} animate={{opacity:1,y:0}} transition={{delay:0.3}}
+          className="text-white text-2xl font-black bg-black/70 px-6 py-3 rounded-3xl backdrop-blur-sm">
+          ⏰ Hết giờ!
+        </motion.p>
+      </motion.div>
+      <motion.div initial={{opacity:0}} animate={{opacity:[0,0.25,0]}} transition={{duration:1.8}}
+        className="absolute inset-0 bg-black rounded-none"/>
+    </div>
+  );
 }
 
 
@@ -1011,11 +1048,11 @@ function HabitTrackerPage({habits,setHabits}:{habits:Habit[];setHabits:(h:Habit[
 }
 
 // ─── Schedule Page ────────────────────────────────────────────────────────────
-const HOUR_H=52;const START_H=0;const END_H=24;
+const HOUR_H=72;const START_H=0;const END_H=24;
 const HOURS=Array.from({length:END_H-START_H},(_,i)=>START_H+i);
 function parseTime(t:string):number{const[h,m]=t.split(':').map(Number);return h*60+m;}
 function eventTop(e:ScheduleEvent):number{return parseTime(e.startTime)/60*HOUR_H;}
-function eventHeight(e:ScheduleEvent):number{return Math.max(8,(parseTime(e.endTime)-parseTime(e.startTime))/60*HOUR_H);}
+function eventHeight(e:ScheduleEvent):number{return Math.max(24,(parseTime(e.endTime)-parseTime(e.startTime))/60*HOUR_H);}
 
 function EventModal({event,onSave,onDelete,onClose}:{event:ScheduleEvent|null;onSave:(e:ScheduleEvent)=>void;onDelete:(id:string)=>void;onClose:()=>void}) {
   const [title,setTitle]=useState(event?.title??'');
@@ -1099,44 +1136,44 @@ function SchedulePage({events,setEvents}:{events:ScheduleEvent[];setEvents:(e:Sc
       {/* GRID VIEW */}
       {viewMode==='grid'&&(
         <div ref={scrollRef} className="overflow-auto" style={{maxHeight:'calc(100vh - 180px)',scrollBehavior:'smooth'}}>
-          <div style={{minWidth:'560px'}}>
-            <div className="flex sticky top-0 z-10 bg-bg-chance pb-1 pt-0" style={{paddingLeft:'44px'}}>
+          <div style={{minWidth:'640px'}}>
+            <div className="flex sticky top-0 z-10 bg-bg-chance pb-2 pt-0" style={{paddingLeft:'60px'}}>
               {DAY_SHORT.map((d,i)=>(
-                <div key={d} className={cn('flex-1 text-center text-xs font-bold py-2 rounded-xl mx-0.5',i===todayIndex()?'bg-black text-white':'text-zinc-400')}>
+                <div key={d} className={cn('flex-1 text-center text-sm font-bold py-2.5 rounded-xl mx-1',i===todayIndex()?'bg-black text-white':'text-zinc-400')}>
                   {d}
                 </div>
               ))}
             </div>
             <div className="flex">
-              <div className="shrink-0" style={{width:'44px'}}>
+              <div className="shrink-0" style={{width:'60px'}}>
                 {HOURS.map(h=>(
-                  <div key={h} style={{height:`${HOUR_H}px`}} className="flex items-start justify-end pr-2 border-t border-zinc-100 first:border-t-0">
-                    <span className="text-[10px] font-bold text-zinc-400 -translate-y-2">{String(h).padStart(2,'0')}:00</span>
+                  <div key={h} style={{height:`${HOUR_H}px`}} className="flex items-start justify-end pr-3 border-t border-zinc-200 first:border-t-0">
+                    <span className="text-xs font-bold text-zinc-500 -translate-y-2.5">{String(h).padStart(2,'0')}:00</span>
                   </div>
                 ))}
               </div>
-              <div className="flex-1 grid gap-0.5" style={{gridTemplateColumns:'repeat(7,1fr)'}}>
+              <div className="flex-1 grid gap-1" style={{gridTemplateColumns:'repeat(7,1fr)'}}>
                 {[0,1,2,3,4,5,6].map(day=>{
                   const nowH=new Date();
                   const nowTop=(nowH.getHours()*60+nowH.getMinutes())/60*HOUR_H;
                   const isToday=day===todayIndex();
                   return (
-                    <div key={day} className="relative bg-zinc-50/50 rounded-xl border border-zinc-100" style={{height:`${END_H*HOUR_H}px`}}>
-                      {HOURS.map(h=><div key={h} style={{top:`${h*HOUR_H}px`}} className="absolute left-0 right-0 border-t border-zinc-100/60"/>)}
+                    <div key={day} className="relative bg-zinc-50/50 rounded-xl border border-zinc-200" style={{height:`${END_H*HOUR_H}px`}}>
+                      {HOURS.map(h=><div key={h} style={{top:`${h*HOUR_H}px`}} className="absolute left-0 right-0 border-t border-zinc-100"/>)}
                       {isToday&&(
                         <div className="absolute left-0 right-0 z-10 flex items-center" style={{top:`${nowTop}px`}}>
-                          <div className="w-2 h-2 rounded-full bg-red-500 shrink-0 -ml-1"/>
-                          <div className="flex-1 h-px bg-red-400"/>
+                          <div className="w-2.5 h-2.5 rounded-full bg-red-500 shrink-0 -ml-1.5"/>
+                          <div className="flex-1 h-0.5 bg-red-400"/>
                         </div>
                       )}
                       {eventsForDay(day).map(ev=>{
                         const top=eventTop(ev),height=eventHeight(ev);
                         return (
                           <div key={ev.id} title={`${ev.title}\n${ev.startTime}–${ev.endTime}`} onClick={()=>setEditEv(ev)}
-                            className="absolute left-0.5 right-0.5 rounded-lg px-1 py-0.5 cursor-pointer hover:brightness-95 overflow-hidden"
-                            style={{top:`${top}px`,height:`${Math.max(height,18)}px`,backgroundColor:ev.color}}>
-                            <p className="text-[9px] font-bold text-zinc-700 leading-tight truncate">{ev.title}</p>
-                            {height>26&&<p className="text-[8px] text-zinc-500">{ev.startTime}</p>}
+                            className="absolute left-1 right-1 rounded-xl px-2 py-1.5 cursor-pointer hover:brightness-95 overflow-hidden border border-white/40 shadow-sm"
+                            style={{top:`${top+2}px`,height:`${Math.max(height-4,28)}px`,backgroundColor:ev.color}}>
+                            <p className="text-xs font-bold text-zinc-700 leading-tight truncate">{ev.title}</p>
+                            {height>38&&<p className="text-[11px] text-zinc-500 font-medium mt-0.5">{ev.startTime}–{ev.endTime}</p>}
                           </div>
                         );
                       })}
