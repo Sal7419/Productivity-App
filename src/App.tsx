@@ -1866,6 +1866,7 @@ function StatisticsPage({tasks,habits,finance,onReset}:{tasks:Task[];habits:Habi
 
 
 // ─── Save / Load Hook (replaces Supabase sync) ───────────────────────────────
+// ─── Save / Load Hook (Tích hợp Supabase) ───────────────────────────────
 const SAVE_KEY='chance-saved-snapshot';
 const SAVE_TS_KEY='chance-saved-ts';
 
@@ -1873,47 +1874,69 @@ function useSaveLoad(
   data: object,
   setData: (d:any)=>void,
   addToast: (t:string,e:string)=>void,
+  user: AuthUser | null // Thêm biến user vào đây
 ) {
   const [savedAt,setSavedAt]=useState<string|null>(()=>localStorage.getItem(SAVE_TS_KEY));
   const [showLoadBanner,setShowLoadBanner]=useState(false);
 
-  // Check on mount if there's a newer saved snapshot vs current working data
   useEffect(()=>{
     const snap=localStorage.getItem(SAVE_KEY);
     const ts=localStorage.getItem(SAVE_TS_KEY);
     if(snap&&ts){
-      // Show banner if snapshot exists and was saved more than 10s ago (means it came from another session)
       const age=Date.now()-new Date(ts).getTime();
       if(age>10000) setShowLoadBanner(true);
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   },[]);
 
-  const save=useCallback(()=>{
-    const ts=new Date().toISOString();
-    try{
-      localStorage.setItem(SAVE_KEY,JSON.stringify(data));
-      localStorage.setItem(SAVE_TS_KEY,ts);
+  const save = useCallback(async () => {
+    const ts = new Date().toISOString();
+    try {
+      // 1. Luôn lưu local để dự phòng (offline mode)
+      localStorage.setItem(SAVE_KEY, JSON.stringify(data));
+      localStorage.setItem(SAVE_TS_KEY, ts);
       setSavedAt(ts);
-      setShowLoadBanner(false);
-      addToast('Đã lưu bản hiện tại!','💾');
-    }catch{addToast('Lưu thất bại','❌');}
-  },[data,addToast]);
 
-  const loadLatest=useCallback(()=>{
-    try{
-      const snap=localStorage.getItem(SAVE_KEY);
-      if(!snap){addToast('Chưa có bản lưu nào','⚠️');return;}
-      const d=JSON.parse(snap);
+      // 2. NẾU CÓ USER -> Đẩy thẳng lên Supabase Cloud
+      if (user && user.token && user.userId) {
+        await sbSetData(user.token, user.userId, data);
+        addToast('Đã lưu lên đám mây!', '☁️');
+      } else {
+        addToast('Đã lưu cục bộ!', '💾');
+      }
+
+      setShowLoadBanner(false);
+    } catch(e: any) {
+      addToast('Lỗi đồng bộ: ' + (e.message || ''), '❌');
+    }
+  }, [data, user, addToast]); // Thêm user vào dependency
+
+  const loadLatest = useCallback(async () => {
+    try {
+      let d = null;
+
+      // 1. NẾU CÓ USER -> Ưu tiên kéo dữ liệu mới nhất từ Supabase
+      if (user && user.token && user.userId) {
+        d = await sbGetData(user.token, user.userId);
+      }
+
+      // 2. Nếu không có trên mạng hoặc chưa đăng nhập -> Lấy local
+      if (!d) {
+        const snap = localStorage.getItem(SAVE_KEY);
+        if (!snap) { addToast('Chưa có bản lưu nào', '⚠️'); return; }
+        d = JSON.parse(snap);
+      }
+
       setData(d);
       setShowLoadBanner(false);
-      addToast('Đã tải bản lưu gần nhất!','📂');
-    }catch{addToast('Tải thất bại','❌');}
-  },[setData,addToast]);
+      addToast('Đã tải bản lưu mới nhất!', '📂');
+    } catch(e: any) {
+      addToast('Lỗi tải dữ liệu: ' + (e.message || ''), '❌');
+    }
+  }, [user, setData, addToast]); // Thêm user vào dependency
 
   const dismissBanner=()=>setShowLoadBanner(false);
 
-  return{save,loadLatest,savedAt,showLoadBanner,dismissBanner};
+  return {save, loadLatest, savedAt, showLoadBanner, dismissBanner};
 }
 
 // ─── App Root ─────────────────────────────────────────────────────────────────
@@ -1945,8 +1968,8 @@ export default function App() {
     if(d.notes)    setNotes(d.notes);
   },[setTasks,setHabits,setFinanceRaw,setSettings,setArchived,setSchedule,setNotes]);
 
-  const {save,loadLatest,savedAt,showLoadBanner,dismissBanner}=useSaveLoad(syncPayload,applyData,addToast);
-  const setFinance=useCallback((f:FinanceState)=>setFinanceRaw(f),[setFinanceRaw]);
+const {save,loadLatest,savedAt,showLoadBanner,dismissBanner} = useSaveLoad(syncPayload, applyData, addToast, user);
+const setFinance=useCallback((f:FinanceState)=>setFinanceRaw(f),[setFinanceRaw]);
 
   // Task done → earn reward
   const handleTaskDone=useCallback((task:Task)=>{
