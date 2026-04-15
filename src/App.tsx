@@ -1891,24 +1891,20 @@ function useSaveLoad(
   const save = useCallback(async () => {
     const ts = new Date().toISOString();
     try {
-      // 1. Luôn lưu local để dự phòng (offline mode)
       localStorage.setItem(SAVE_KEY, JSON.stringify(data));
       localStorage.setItem(SAVE_TS_KEY, ts);
-      setSavedAt(ts);
 
-      // 2. NẾU CÓ USER -> Đẩy thẳng lên Supabase Cloud
-      if (user && user.token && user.userId) {
-        await sbSetData(user.token, user.userId, data);
-        addToast('Đã lưu lên đám mây!', '☁️');
-      } else {
-        addToast('Đã lưu cục bộ!', '💾');
+      if (user && user.userId) {
+        // KIỂM TRA VÀ LẤY TOKEN MỚI TRƯỚC KHI LƯU
+        const validToken = await ensureValidToken(user, setUser);
+        await sbSetData(validToken, user.userId, data);
+        addToast('Đã đồng bộ đám mây!', '☁️');
       }
-
-      setShowLoadBanner(false);
+      setSavedAt(ts);
     } catch(e: any) {
-      addToast('Lỗi đồng bộ: ' + (e.message || ''), '❌');
+      addToast(e.message || 'Lưu thất bại', '❌');
     }
-  }, [data, user, addToast]); // Thêm user vào dependency
+  }, [data, user, setUser, addToast]);
 
   const loadLatest = useCallback(async () => {
     try {
@@ -1937,6 +1933,31 @@ function useSaveLoad(
   const dismissBanner=()=>setShowLoadBanner(false);
 
   return {save, loadLatest, savedAt, showLoadBanner, dismissBanner};
+}
+
+// Thêm hàm bổ trợ này vào trong App.tsx hoặc bên ngoài hook
+async function ensureValidToken(user: AuthUser, setUser: (u: AuthUser | null) => void) {
+  // Nếu còn hơn 5 phút nữa mới hết hạn thì không cần refresh
+  if (Date.now() < user.expiresAt - 5 * 60 * 1000) return user.token;
+
+  try {
+    console.log("Token sắp hết hạn, đang refresh...");
+    const data = await sbRefresh(user.refreshToken);
+
+    const newUser: AuthUser = {
+      ...user,
+      token: data.access_token,
+      refreshToken: data.refresh_token ?? user.refreshToken,
+      expiresAt: Date.now() + (data.expires_in ?? 3600) * 1000,
+    };
+
+    setUser(newUser); // Cập nhật lại state và localStorage
+    return newUser.token;
+  } catch (e) {
+    console.error("Không thể refresh token:", e);
+    setUser(null); // Nếu lỗi (ví dụ refresh token cũng hết hạn), bắt đăng nhập lại
+    throw new Error("Phiên đăng nhập hết hạn, vui lòng đăng nhập lại.");
+  }
 }
 
 // ─── App Root ─────────────────────────────────────────────────────────────────
