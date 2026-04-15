@@ -48,6 +48,7 @@ class ErrorBoundary extends React.Component<{children:React.ReactNode},{error:Er
 // ─── Utilities ────────────────────────────────────────────────────────────────
 function cn(...inputs: ClassValue[]) { return twMerge(clsx(inputs)); }
 
+/** Only used for auth token — everything else lives on Supabase */
 function useLocalStorage<T>(key: string, initial: T) {
   const [value, setValue] = useState<T>(() => {
     try { const s = localStorage.getItem(key); return s ? JSON.parse(s) : initial; }
@@ -55,6 +56,11 @@ function useLocalStorage<T>(key: string, initial: T) {
   });
   useEffect(() => { try { localStorage.setItem(key, JSON.stringify(value)); } catch {} }, [key, value]);
   return [value, setValue] as const;
+}
+
+/** Simple in-memory state — data comes from / goes to Supabase only */
+function useServerState<T>(initial: T) {
+  return useState<T>(initial);
 }
 
 function formatVND(n: number) {
@@ -102,7 +108,7 @@ async function sbSetData(token: string, uid: string, data: object) {
 // ─── Types ────────────────────────────────────────────────────────────────────
 type Priority = 'high'|'medium'|'low';
 type Status   = 'todo'|'in-progress'|'done';
-interface Task { id:string;title:string;status:Status;priority:Priority;category:string;deadline:string;createdAt:string;tags:string[]; }
+interface Task { id:string;title:string;status:Status;priority:Priority;category:string;deadline:string;createdAt:string;tags:string[];archivedAt?:string; }
 interface Habit{ id:string;name:string;streak:number;completed:boolean[];group:'study'|'life'; }
 interface Transaction{ id:string;type:'income'|'expense'|'reward';amount:number;note:string;date:string;taskTitle?:string; }
 interface FinanceState{ rewardPerTask:number;transactions:Transaction[]; }
@@ -236,9 +242,9 @@ const NAV_ITEMS=[
   {id:'stats',    icon:BarChart3,   label:'Stats'},
 ];
 
-function Sidebar({activePage,setActivePage,settings,setSettings,user,onLogout,onSave,onLoadLatest,savedLabel}:
+function Sidebar({activePage,setActivePage,settings,setSettings,user,onLogout,onSyncClick,syncing}:
   {activePage:string;setActivePage:(p:string)=>void;settings:AppSettings;setSettings:(s:AppSettings)=>void;
-   user:AuthUser|null;onLogout:()=>void;onSave:()=>void;onLoadLatest:()=>void;savedLabel:string|null;}) {
+   user:AuthUser|null;onLogout:()=>void;onSyncClick:()=>void;syncing:boolean;}) {
   return (
     <aside className="hidden md:flex w-56 h-screen bg-sidebar-dark text-zinc-400 p-4 flex-col gap-4 sticky top-0 z-50 shrink-0 overflow-y-auto no-scrollbar">
       <div className="flex items-center gap-2.5 mb-1 cursor-pointer" onClick={()=>setActivePage('home')}>
@@ -267,32 +273,30 @@ function Sidebar({activePage,setActivePage,settings,setSettings,user,onLogout,on
         </div>
       </div>
       <div className="mt-auto border-t border-white/10 pt-3 flex flex-col gap-1.5">
-        <button onClick={onSave} className="flex items-center gap-2 px-3 py-2.5 rounded-2xl text-xs font-bold text-white hover:bg-white/10 transition-colors" style={{backgroundColor:'var(--ac)'}}>
-          <Check className="w-3.5 h-3.5"/>Lưu bản hiện tại
-        </button>
-        {savedLabel&&(
-          <p className="text-[10px] text-zinc-500 px-3">Lưu lúc {savedLabel}</p>
-        )}
-        <button onClick={onLoadLatest} className="flex items-center gap-2 px-3 py-2 rounded-2xl text-xs font-bold text-zinc-300 hover:text-white hover:bg-white/5 transition-colors">
-          <RefreshCw className="w-3.5 h-3.5"/>Tải bản mới nhất
-        </button>
         {user?(
           <>
-            <div className="flex items-center gap-2 px-1 mt-1">
+            <div className="flex items-center gap-2 px-1">
               <div className="w-6 h-6 rounded-full bg-white/20 flex items-center justify-center shrink-0"><User className="w-3.5 h-3.5 text-white"/></div>
               <span className="text-xs text-zinc-300 font-semibold truncate flex-1">{user.email}</span>
             </div>
+            <button onClick={onSyncClick} className={cn('flex items-center gap-2 px-3 py-2 rounded-2xl text-xs font-bold text-emerald-400 hover:bg-white/5 transition-colors',syncing&&'opacity-60')}>
+              <RefreshCw className={cn('w-3.5 h-3.5',syncing&&'animate-spin')}/>{syncing?'Đang đồng bộ...':'Đồng bộ ngay'}
+            </button>
             <button onClick={onLogout} className="flex items-center gap-2 px-3 py-2 rounded-2xl text-xs font-bold text-red-400 hover:bg-red-400/10 transition-colors">
               <LogOut className="w-3.5 h-3.5"/>Đăng xuất
             </button>
           </>
-        ):null}
+        ):(
+          <button onClick={onSyncClick} className="flex items-center gap-2 px-3 py-2 rounded-2xl text-xs font-bold text-zinc-300 hover:text-white hover:bg-white/5 transition-colors">
+            <LogIn className="w-3.5 h-3.5"/>Đăng nhập / Tạo tài khoản
+          </button>
+        )}
       </div>
     </aside>
   );
 }
 
-function BottomNav({activePage,setActivePage,onSave}:{activePage:string;setActivePage:(p:string)=>void;onSave:()=>void;}) {
+function BottomNav({activePage,setActivePage,user,onSyncClick}:{activePage:string;setActivePage:(p:string)=>void;user:AuthUser|null;onSyncClick:()=>void}) {
   return (
     <nav className="md:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-zinc-100 z-50 flex overflow-x-auto no-scrollbar">
       {NAV_ITEMS.map(item=>(
@@ -302,9 +306,11 @@ function BottomNav({activePage,setActivePage,onSave}:{activePage:string;setActiv
           <span className="text-[8px] font-semibold">{item.label}</span>
         </button>
       ))}
-      <button onClick={onSave} className="flex-1 min-w-[44px] flex flex-col items-center gap-0.5 py-2 transition-colors text-zinc-400 hover:text-black">
-        <Check className="w-4 h-4"/>
-        <span className="text-[8px] font-semibold">Lưu</span>
+      {/* Mobile login/sync button */}
+      <button onClick={onSyncClick}
+        className={cn('flex-1 min-w-[44px] flex flex-col items-center gap-0.5 py-2 transition-colors',user?'text-emerald-500':'text-zinc-400')}>
+        <User className="w-4 h-4"/>
+        <span className="text-[8px] font-semibold">{user?'Sync':'Login'}</span>
       </button>
     </nav>
   );
@@ -463,7 +469,6 @@ function PomodoroPage({settings,setSettings}:{settings:AppSettings;setSettings:(
   const [isActive,setIsActive]=useState(false);
   const [sessions,setSessions]=useLocalStorage('pomo-sessions',0);
   const [showCfg,setShowCfg]=useState(false);
-  const [showBell,setShowBell]=useState(false);
   const [draft,setDraft]=useState(settings.pomoDurations);
   const intRef=useRef<ReturnType<typeof setInterval>|null>(null);
   const modeBg:Record<PomMode,string>={work:'bg-bg-chance',short:'bg-emerald-50',long:'bg-indigo-50'};
@@ -477,7 +482,6 @@ function PomodoroPage({settings,setSettings}:{settings:AppSettings;setSettings:(
     else if(isActive&&timeLeft===0){
       setIsActive(false);
       playBell();
-      setShowBell(true);
       if(mode==='work')setSessions(s=>s+1);
     }
     return()=>{if(intRef.current)clearInterval(intRef.current);};
@@ -486,7 +490,6 @@ function PomodoroPage({settings,setSettings}:{settings:AppSettings;setSettings:(
   const fmt=(s:number)=>`${String(Math.floor(s/60)).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`;
   return (
     <div className={cn('flex flex-col items-center justify-center min-h-screen gap-7 p-6 pb-24 md:pb-6 transition-colors duration-700',modeBg[mode])}>
-      <AnimatePresence>{showBell&&<BellFlash onDone={()=>setShowBell(false)}/>}</AnimatePresence>
       <div className="flex gap-2 bg-white/70 p-1.5 rounded-[2rem] shadow-sm flex-wrap justify-center">
         {(Object.keys(dur)as PomMode[]).map(m=>(
           <button key={m} onClick={()=>switchMode(m)}
@@ -544,49 +547,15 @@ function PomodoroPage({settings,setSettings}:{settings:AppSettings;setSettings:(
 function playBell() {
   try {
     const ctx=new (window.AudioContext||(window as any).webkitAudioContext)();
-    // Rich bell sequence: ding-ding-ding with harmonics
-    const bellNotes=[
-      {freq:880,delay:0,dur:1.2,vol:0.5},
-      {freq:1108,delay:0.05,dur:1.0,vol:0.3},
-      {freq:1320,delay:0.1,dur:0.8,vol:0.2},
-      {freq:660,delay:0.5,dur:1.2,vol:0.4},
-      {freq:880,delay:0.55,dur:1.0,vol:0.25},
-      {freq:880,delay:1.1,dur:1.5,vol:0.5},
-      {freq:1108,delay:1.15,dur:1.2,vol:0.3},
-    ];
-    bellNotes.forEach(({freq,delay,dur,vol})=>{
+    [[880,0],[660,0.15],[440,0.35]].forEach(([freq,delay])=>{
       const osc=ctx.createOscillator(),gain=ctx.createGain();
       osc.connect(gain);gain.connect(ctx.destination);
       osc.frequency.value=freq;osc.type='sine';
-      gain.gain.setValueAtTime(0,ctx.currentTime+delay);
-      gain.gain.linearRampToValueAtTime(vol,ctx.currentTime+delay+0.01);
-      gain.gain.exponentialRampToValueAtTime(0.001,ctx.currentTime+delay+dur);
-      osc.start(ctx.currentTime+delay);osc.stop(ctx.currentTime+delay+dur+0.05);
+      gain.gain.setValueAtTime(0.4,ctx.currentTime+delay);
+      gain.gain.exponentialRampToValueAtTime(0.001,ctx.currentTime+delay+1);
+      osc.start(ctx.currentTime+delay);osc.stop(ctx.currentTime+delay+1.1);
     });
-    // Vibrate on mobile if supported
-    if(navigator.vibrate){navigator.vibrate([200,100,200,100,400]);}
   }catch{}
-}
-
-// Bell flash overlay component
-function BellFlash({onDone}:{onDone:()=>void}) {
-  useEffect(()=>{const t=setTimeout(onDone,1800);return()=>clearTimeout(t);},[onDone]);
-  return (
-    <div className="fixed inset-0 z-[500] pointer-events-none flex items-center justify-center">
-      <motion.div initial={{opacity:0,scale:0.5}} animate={{opacity:[0,1,1,0],scale:[0.5,1.2,1,0.8]}}
-        transition={{duration:1.8,times:[0,0.2,0.7,1]}}
-        className="flex flex-col items-center gap-4">
-        <motion.div animate={{rotate:[0,-15,15,-10,10,-5,5,0]}} transition={{duration:0.8,repeat:2}}
-          className="text-7xl select-none">🔔</motion.div>
-        <motion.p initial={{opacity:0,y:10}} animate={{opacity:1,y:0}} transition={{delay:0.3}}
-          className="text-white text-2xl font-black bg-black/70 px-6 py-3 rounded-3xl backdrop-blur-sm">
-          ⏰ Hết giờ!
-        </motion.p>
-      </motion.div>
-      <motion.div initial={{opacity:0}} animate={{opacity:[0,0.25,0]}} transition={{duration:1.8}}
-        className="absolute inset-0 bg-black rounded-none"/>
-    </div>
-  );
 }
 
 
@@ -780,9 +749,14 @@ function TaskListPage({tasks,setTasks,categories,onTaskDone,onTaskUndo}:{
   const toggleDone=(id:string)=>{
     const task=tasks.find(t=>t.id===id)!;
     const wasDone=task.status==='done';
-    setTasks(tasks.map(t=>t.id===id?{...t,status:t.status==='done'?'todo':'done'}:t));
-    if(!wasDone) onTaskDone(task);   // completing → earn reward
-    else         onTaskUndo(task);   // un-completing → deduct reward
+    if(!wasDone){
+      // Mark done → useEffect in App will auto-archive it
+      setTasks(tasks.map(t=>t.id===id?{...t,status:'done' as Status}:t));
+      onTaskDone(task);
+    } else {
+      // Already done (shouldn't normally appear in list), undo
+      onTaskUndo(task);
+    }
   };
 
   return (
@@ -870,7 +844,6 @@ const KCOLS:[{id:Status;title:string;color:string}]=([
   {id:'in-progress',title:'In Progress',color:'bg-blue-50'},
   {id:'done',title:'Done',color:'bg-emerald-50'},
 ] as any);
-const ARCHIVE_THRESHOLD=10;
 
 function KanbanPage({tasks,setTasks,archived,setArchived}:{tasks:Task[];setTasks:(t:Task[])=>void;archived:Task[];setArchived:(t:Task[])=>void}) {
   const dragId=useRef<string|null>(null);
@@ -883,13 +856,6 @@ function KanbanPage({tasks,setTasks,archived,setArchived}:{tasks:Task[];setTasks
   const startOffset=(new Date(cm.year,cm.month,1).getDay()+6)%7;
   const deadlines=new Map<number,Task[]>();
   tasks.forEach(t=>{const d=new Date(t.deadline);if(d.getFullYear()===cm.year&&d.getMonth()===cm.month)deadlines.set(d.getDate(),[...(deadlines.get(d.getDate())??[]),t]);});
-  const done=tasks.filter(t=>t.status==='done');
-  useEffect(()=>{
-    if(done.length>=ARCHIVE_THRESHOLD){
-      const toArch=done.slice(0,done.length-5);
-      if(toArch.length>0){setArchived([...toArch,...archived]);setTasks(tasks.filter(t=>!toArch.find(a=>a.id===t.id)));}
-    }
-  },[done.length]);
   const move=(id:string,s:Status)=>setTasks(tasks.map(t=>t.id===id?{...t,status:s}:t));
   const selTasks=selDay?(deadlines.get(selDay)??[]):[];
   return (
@@ -900,12 +866,6 @@ function KanbanPage({tasks,setTasks,archived,setArchived}:{tasks:Task[];setTasks
           <Archive className="w-3.5 h-3.5"/> Lưu trữ ({archived.length})
         </button>
       </div>
-      {done.length>=ARCHIVE_THRESHOLD-2&&(
-        <div className="bg-amber-50 border border-amber-200 rounded-2xl p-3 flex items-center gap-2 text-sm">
-          <AlertCircle className="w-4 h-4 text-amber-500 shrink-0"/>
-          <p className="text-amber-700 font-semibold">Cột Done gần đầy — tự lưu trữ khi đạt {ARCHIVE_THRESHOLD} task.</p>
-        </div>
-      )}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         {KCOLS.map((col:any)=>(
           <div key={col.id} className={cn('p-5 rounded-[2rem] flex flex-col gap-3 min-h-[180px]',col.color)}
@@ -982,12 +942,18 @@ function KanbanPage({tasks,setTasks,archived,setArchived}:{tasks:Task[];setTasks
                 <button onClick={()=>setShowArch(false)} className="w-8 h-8 rounded-full bg-zinc-100 flex items-center justify-center"><X className="w-4 h-4"/></button>
               </div>
               <div className="overflow-y-auto flex flex-col gap-2 no-scrollbar">
-                {archived.length===0?<p className="text-center text-zinc-400 py-8">Chưa có task nào.</p>:archived.map(t=>(
-                  <div key={t.id} className="flex items-center gap-3 p-3 bg-zinc-50 rounded-2xl">
+                {archived.length===0?<p className="text-center text-zinc-400 py-8">Chưa có task nào.</p>:archived.map(t=>{
+                const daysLeft=t.archivedAt?30-Math.floor((Date.now()-new Date(t.archivedAt).getTime())/86400000):30;
+                return (
+                  <div key={t.id} className="flex items-center gap-3 p-3 bg-zinc-50 rounded-2xl group">
                     <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0"/>
-                    <div className="flex-1 min-w-0"><p className="font-bold text-sm truncate line-through text-zinc-400">{t.title}</p><p className="text-[10px] text-zinc-400">{t.category} · {t.deadline}</p></div>
+                    <div className="flex-1 min-w-0">
+                      <p className="font-bold text-sm truncate line-through text-zinc-400">{t.title}</p>
+                      <p className="text-[10px] text-zinc-400">{t.category} · Xóa sau {Math.max(0,daysLeft)} ngày</p>
+                    </div>
                   </div>
-                ))}
+                );
+              })}
               </div>
               {archived.length>0&&<button onClick={()=>{setArchived([]);setShowArch(false);}} className="mt-4 w-full py-3 bg-red-50 text-red-500 rounded-2xl text-sm font-bold hover:bg-red-100 shrink-0">Xóa toàn bộ lưu trữ</button>}
             </motion.div>
@@ -1048,11 +1014,11 @@ function HabitTrackerPage({habits,setHabits}:{habits:Habit[];setHabits:(h:Habit[
 }
 
 // ─── Schedule Page ────────────────────────────────────────────────────────────
-const HOUR_H=72;const START_H=0;const END_H=24;
+const HOUR_H=52;const START_H=0;const END_H=24;
 const HOURS=Array.from({length:END_H-START_H},(_,i)=>START_H+i);
 function parseTime(t:string):number{const[h,m]=t.split(':').map(Number);return h*60+m;}
 function eventTop(e:ScheduleEvent):number{return parseTime(e.startTime)/60*HOUR_H;}
-function eventHeight(e:ScheduleEvent):number{return Math.max(24,(parseTime(e.endTime)-parseTime(e.startTime))/60*HOUR_H);}
+function eventHeight(e:ScheduleEvent):number{return Math.max(8,(parseTime(e.endTime)-parseTime(e.startTime))/60*HOUR_H);}
 
 function EventModal({event,onSave,onDelete,onClose}:{event:ScheduleEvent|null;onSave:(e:ScheduleEvent)=>void;onDelete:(id:string)=>void;onClose:()=>void}) {
   const [title,setTitle]=useState(event?.title??'');
@@ -1136,44 +1102,44 @@ function SchedulePage({events,setEvents}:{events:ScheduleEvent[];setEvents:(e:Sc
       {/* GRID VIEW */}
       {viewMode==='grid'&&(
         <div ref={scrollRef} className="overflow-auto" style={{maxHeight:'calc(100vh - 180px)',scrollBehavior:'smooth'}}>
-          <div style={{minWidth:'640px'}}>
-            <div className="flex sticky top-0 z-10 bg-bg-chance pb-2 pt-0" style={{paddingLeft:'60px'}}>
+          <div style={{minWidth:'560px'}}>
+            <div className="flex sticky top-0 z-10 bg-bg-chance pb-1 pt-0" style={{paddingLeft:'44px'}}>
               {DAY_SHORT.map((d,i)=>(
-                <div key={d} className={cn('flex-1 text-center text-sm font-bold py-2.5 rounded-xl mx-1',i===todayIndex()?'bg-black text-white':'text-zinc-400')}>
+                <div key={d} className={cn('flex-1 text-center text-xs font-bold py-2 rounded-xl mx-0.5',i===todayIndex()?'bg-black text-white':'text-zinc-400')}>
                   {d}
                 </div>
               ))}
             </div>
-            <div className="flex" style={{paddingTop:'10px'}}>
-              <div className="shrink-0" style={{width:'60px'}}>
+            <div className="flex">
+              <div className="shrink-0" style={{width:'44px'}}>
                 {HOURS.map(h=>(
-                  <div key={h} style={{height:`${HOUR_H}px`}} className="flex items-start justify-end pr-3">
-                    <span className="text-xs font-bold text-zinc-500 -translate-y-2">{String(h).padStart(2,'0')}:00</span>
+                  <div key={h} style={{height:`${HOUR_H}px`}} className="flex items-start justify-end pr-2 border-t border-zinc-100 first:border-t-0">
+                    <span className="text-[10px] font-bold text-zinc-400 -translate-y-2">{String(h).padStart(2,'0')}:00</span>
                   </div>
                 ))}
               </div>
-              <div className="flex-1 grid gap-1" style={{gridTemplateColumns:'repeat(7,1fr)'}}>
+              <div className="flex-1 grid gap-0.5" style={{gridTemplateColumns:'repeat(7,1fr)'}}>
                 {[0,1,2,3,4,5,6].map(day=>{
                   const nowH=new Date();
                   const nowTop=(nowH.getHours()*60+nowH.getMinutes())/60*HOUR_H;
                   const isToday=day===todayIndex();
                   return (
-                    <div key={day} className="relative bg-zinc-50/50 rounded-xl border border-zinc-200" style={{height:`${END_H*HOUR_H}px`}}>
-                      {HOURS.map(h=><div key={h} style={{top:`${h*HOUR_H}px`}} className="absolute left-0 right-0 border-t border-zinc-100"/>)}
+                    <div key={day} className="relative bg-zinc-50/50 rounded-xl border border-zinc-100" style={{height:`${END_H*HOUR_H}px`}}>
+                      {HOURS.map(h=><div key={h} style={{top:`${h*HOUR_H}px`}} className="absolute left-0 right-0 border-t border-zinc-100/60"/>)}
                       {isToday&&(
                         <div className="absolute left-0 right-0 z-10 flex items-center" style={{top:`${nowTop}px`}}>
-                          <div className="w-2.5 h-2.5 rounded-full bg-red-500 shrink-0 -ml-1.5"/>
-                          <div className="flex-1 h-0.5 bg-red-400"/>
+                          <div className="w-2 h-2 rounded-full bg-red-500 shrink-0 -ml-1"/>
+                          <div className="flex-1 h-px bg-red-400"/>
                         </div>
                       )}
                       {eventsForDay(day).map(ev=>{
                         const top=eventTop(ev),height=eventHeight(ev);
                         return (
                           <div key={ev.id} title={`${ev.title}\n${ev.startTime}–${ev.endTime}`} onClick={()=>setEditEv(ev)}
-                            className="absolute left-1 right-1 rounded-xl px-2 py-1.5 cursor-pointer hover:brightness-95 overflow-hidden border border-white/40 shadow-sm"
-                            style={{top:`${top+2}px`,height:`${Math.max(height-4,28)}px`,backgroundColor:ev.color}}>
-                            <p className="text-xs font-bold text-zinc-700 leading-tight truncate">{ev.title}</p>
-                            {height>38&&<p className="text-[11px] text-zinc-500 font-medium mt-0.5">{ev.startTime}–{ev.endTime}</p>}
+                            className="absolute left-0.5 right-0.5 rounded-lg px-1 py-0.5 cursor-pointer hover:brightness-95 overflow-hidden"
+                            style={{top:`${top}px`,height:`${Math.max(height,18)}px`,backgroundColor:ev.color}}>
+                            <p className="text-[9px] font-bold text-zinc-700 leading-tight truncate">{ev.title}</p>
+                            {height>26&&<p className="text-[8px] text-zinc-500">{ev.startTime}</p>}
                           </div>
                         );
                       })}
@@ -1865,77 +1831,119 @@ function StatisticsPage({tasks,habits,finance,onReset}:{tasks:Task[];habits:Habi
 }
 
 
-// ─── Save / Load Hook (replaces Supabase sync) ───────────────────────────────
-const SAVE_KEY='chance-saved-snapshot';
-const SAVE_TS_KEY='chance-saved-ts';
-
-function useSaveLoad(
+// ─── Supabase Sync Hook ───────────────────────────────────────────────────────
+function useSupabaseSync(
+  user: AuthUser|null,
   data: object,
   setData: (d:any)=>void,
-  addToast: (t:string,e:string)=>void,
+  setUser: (u:AuthUser|null)=>void,
 ) {
-  const [savedAt,setSavedAt]=useState<string|null>(()=>localStorage.getItem(SAVE_TS_KEY));
-  const [showLoadBanner,setShowLoadBanner]=useState(false);
+  const [syncing,setSyncing]=useState(false);
+  // `ready` = initial pull done; don't push until then to avoid overwriting server data
+  const ready=useRef(false);
+  const debRef=useRef<ReturnType<typeof setTimeout>|null>(null);
+  const dataRef=useRef(data);
+  dataRef.current=data;
 
-  // Check on mount if there's a newer saved snapshot vs current working data
+  // Refresh token if expired (<5 min left)
+  const getValidToken=useCallback(async():Promise<string|null>=>{
+    if(!user)return null;
+    const fiveMin=5*60*1000;
+    if(user.expiresAt>Date.now()+fiveMin) return user.token;
+    if(!user.refreshToken) return user.token;
+    try{
+      const r=await sbRefresh(user.refreshToken);
+      const updated:AuthUser={...user,token:r.access_token,refreshToken:r.refresh_token??user.refreshToken,expiresAt:Date.now()+(r.expires_in??3600)*1000};
+      setUser(updated);
+      return r.access_token;
+    }catch{return user.token;}
+  },[user,setUser]);
+
+  const push=useCallback(async(payload:object)=>{
+    if(!user||!SB_URL||!ready.current)return;
+    try{
+      const token=await getValidToken();
+      if(token) await sbSetData(token,user.userId,payload);
+    }catch{}
+  },[user,getValidToken]);
+
+  const pull=useCallback(async()=>{
+    if(!user||!SB_URL)return;
+    setSyncing(true);
+    try{
+      const token=await getValidToken();
+      if(!token)return;
+      const d=await sbGetData(token,user.userId);
+      if(d) setData(d);
+    }catch{}finally{
+      setSyncing(false);
+      ready.current=true; // allow push after first pull
+    }
+  },[user,setData,getValidToken]);
+
+  // Auto-pull on mount (or when user changes) — this is the KEY fix
   useEffect(()=>{
-    const snap=localStorage.getItem(SAVE_KEY);
-    const ts=localStorage.getItem(SAVE_TS_KEY);
-    if(snap&&ts){
-      // Show banner if snapshot exists and was saved more than 10s ago (means it came from another session)
-      const age=Date.now()-new Date(ts).getTime();
-      if(age>10000) setShowLoadBanner(true);
+    ready.current=false; // reset on user change
+    if(user&&SB_URL){
+      pull();
+    } else {
+      ready.current=true; // no user → allow push immediately
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[]);
+  },[user?.userId]);
 
-  const save=useCallback(()=>{
-    const ts=new Date().toISOString();
-    try{
-      localStorage.setItem(SAVE_KEY,JSON.stringify(data));
-      localStorage.setItem(SAVE_TS_KEY,ts);
-      setSavedAt(ts);
-      setShowLoadBanner(false);
-      addToast('Đã lưu bản hiện tại!','💾');
-    }catch{addToast('Lưu thất bại','❌');}
-  },[data,addToast]);
+  // Debounced auto-push when data changes — only after pull is done
+  useEffect(()=>{
+    if(!user||!SB_URL)return;
+    if(debRef.current)clearTimeout(debRef.current);
+    debRef.current=setTimeout(()=>{if(ready.current)push(dataRef.current);},2000);
+    return()=>{if(debRef.current)clearTimeout(debRef.current);};
+  },[data,user,push]);
 
-  const loadLatest=useCallback(()=>{
-    try{
-      const snap=localStorage.getItem(SAVE_KEY);
-      if(!snap){addToast('Chưa có bản lưu nào','⚠️');return;}
-      const d=JSON.parse(snap);
-      setData(d);
-      setShowLoadBanner(false);
-      addToast('Đã tải bản lưu gần nhất!','📂');
-    }catch{addToast('Tải thất bại','❌');}
-  },[setData,addToast]);
-
-  const dismissBanner=()=>setShowLoadBanner(false);
-
-  return{save,loadLatest,savedAt,showLoadBanner,dismissBanner};
+  return{syncing,pull};
 }
 
 // ─── App Root ─────────────────────────────────────────────────────────────────
 export default function App() {
   const [activePage,setActivePage]=useState('home');
-  const [tasks,setTasks]         =useLocalStorage<Task[]>('chance-tasks',INIT_TASKS);
-  const [habits,setHabits]       =useLocalStorage<Habit[]>('chance-habits',INIT_HABITS);
-  const [finance,setFinanceRaw]  =useLocalStorage<FinanceState>('chance-finance',INIT_FINANCE);
-  const [settings,setSettings]   =useLocalStorage<AppSettings>('chance-settings',INIT_SETTINGS);
-  const [archived,setArchived]   =useLocalStorage<Task[]>('chance-archived',[]);
-  const [schedule,setSchedule]   =useLocalStorage<ScheduleEvent[]>('chance-schedule',INIT_SCHEDULE);
-  const [notes,setNotes]         =useLocalStorage<Note[]>('chance-notes',INIT_NOTES);
-  const [user,setUser]           =useLocalStorage<AuthUser|null>('chance-user',null);
+
+  // Auth token: kept in localStorage so user stays logged in across browser sessions
+  const [user,setUser]=useLocalStorage<AuthUser|null>('chance-user',null);
+
+  // All app data lives in memory — Supabase is the single source of truth
+  const [tasks,setTasks]         =useServerState<Task[]>(INIT_TASKS);
+  const [habits,setHabits]       =useServerState<Habit[]>(INIT_HABITS);
+  const [finance,setFinanceRaw]  =useServerState<FinanceState>(INIT_FINANCE);
+  const [settings,setSettings]   =useServerState<AppSettings>(INIT_SETTINGS);
+  const [archived,setArchived]   =useServerState<Task[]>([]);
+  const [schedule,setSchedule]   =useServerState<ScheduleEvent[]>(INIT_SCHEDULE);
+  const [notes,setNotes]         =useServerState<Note[]>(INIT_NOTES);
   const [showAuth,setShowAuth]   =useState(false);
   const {toasts,add:addToast}    =useToast();
+
+  // ── Auto-archive completed tasks + purge >30 days ──────────────────────────
+  const doneTasks=tasks.filter(t=>t.status==='done');
+  const doneCount=doneTasks.length;
+  useEffect(()=>{
+    if(doneCount===0) return;
+    const thirtyDaysAgo=new Date(Date.now()-30*24*60*60*1000).toISOString().split('T')[0];
+    const toArchive=doneTasks.map(t=>({...t,archivedAt:t.archivedAt??todayStr()}));
+    setTasks(prev=>prev.filter(t=>t.status!=='done'));
+    setArchived(prev=>{
+      const existingIds=new Set(prev.map(a=>a.id));
+      const newOnes=toArchive.filter(t=>!existingIds.has(t.id));
+      const purged=prev.filter(t=>(t.archivedAt??'9999')>=thirtyDaysAgo);
+      return [...newOnes,...purged];
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[doneCount]);
 
   useAccentCSS(settings.accentColor);
 
   const allCategories=useMemo(()=>[...DEFAULT_CATEGORIES,...settings.customCategories.filter(c=>!DEFAULT_CATEGORIES.includes(c))],[settings.customCategories]);
   const syncPayload=useMemo(()=>({tasks,habits,finance,settings,archived,schedule,notes}),[tasks,habits,finance,settings,archived,schedule,notes]);
 
-  const applyData=useCallback((d:any)=>{
+  const applyServerData=useCallback((d:any)=>{
     if(d.tasks)    setTasks(d.tasks);
     if(d.habits)   setHabits(d.habits);
     if(d.finance)  setFinanceRaw(d.finance);
@@ -1943,12 +1951,13 @@ export default function App() {
     if(d.archived) setArchived(d.archived);
     if(d.schedule) setSchedule(d.schedule);
     if(d.notes)    setNotes(d.notes);
-  },[setTasks,setHabits,setFinanceRaw,setSettings,setArchived,setSchedule,setNotes]);
+    addToast('Đồng bộ thành công!','☁️');
+  },[setTasks,setHabits,setFinanceRaw,setSettings,setArchived,setSchedule,setNotes,addToast]);
 
-  const {save,loadLatest,savedAt,showLoadBanner,dismissBanner}=useSaveLoad(syncPayload,applyData,addToast);
+  const {syncing,pull}=useSupabaseSync(user,syncPayload,applyServerData,setUser);
   const setFinance=useCallback((f:FinanceState)=>setFinanceRaw(f),[setFinanceRaw]);
 
-  // Task done → earn reward
+  // Task done → earn reward (archive handled by useEffect above)
   const handleTaskDone=useCallback((task:Task)=>{
     setFinanceRaw(prev=>{
       const tx:Transaction={id:Date.now().toString(),type:'reward',amount:prev.rewardPerTask,note:'Hoàn thành task',date:todayStr(),taskTitle:task.title};
@@ -1957,14 +1966,17 @@ export default function App() {
     addToast(`+${formatVND(finance.rewardPerTask)} vào ví! 💰`,'');
   },[finance.rewardPerTask,setFinanceRaw,addToast]);
 
-  // Task un-done → deduct reward
+  // Task un-done → deduct reward + restore to active tasks
   const handleTaskUndo=useCallback((task:Task)=>{
+    // Move back from archived to tasks
+    setArchived(prev=>prev.filter(t=>t.id!==task.id));
+    setTasks(prev=>[{...task,status:'todo' as Status,archivedAt:undefined},...prev.filter(t=>t.id!==task.id)]);
     setFinanceRaw(prev=>{
       const tx:Transaction={id:Date.now().toString(),type:'expense',amount:prev.rewardPerTask,note:'Huỷ hoàn thành task',date:todayStr(),taskTitle:task.title};
       return{...prev,transactions:[tx,...prev.transactions]};
     });
     addToast(`−${formatVND(finance.rewardPerTask)} trừ từ ví`,'↩️');
-  },[finance.rewardPerTask,setFinanceRaw,addToast]);
+  },[finance.rewardPerTask,setArchived,setTasks,setFinanceRaw,addToast]);
 
   // Full reset
   const handleReset=useCallback(()=>{
@@ -1973,27 +1985,31 @@ export default function App() {
     addToast('Đã reset toàn bộ dữ liệu','🔄');
   },[setTasks,setHabits,setFinanceRaw,setSettings,setArchived,setSchedule,setNotes,addToast]);
 
-  const handleLogout=()=>{setUser(null);addToast('Đã đăng xuất','👋');};
-
-  // Format savedAt timestamp nicely
-  const savedLabel=savedAt?new Date(savedAt).toLocaleTimeString('vi-VN',{hour:'2-digit',minute:'2-digit',day:'2-digit',month:'2-digit'}):null;
+  const handleLogin=(u:AuthUser)=>{
+    setUser(u);
+    addToast(`Xin chào, ${u.email}!`,'👋');
+    // pull() triggered automatically by useSupabaseSync when user changes
+  };
+  const handleLogout=()=>{
+    setUser(null);
+    // Reset to defaults on logout so stale data isn't shown
+    setTasks(INIT_TASKS);setHabits(INIT_HABITS);setFinanceRaw(INIT_FINANCE);
+    setSettings(INIT_SETTINGS);setArchived([]);setSchedule(INIT_SCHEDULE);setNotes(INIT_NOTES);
+    addToast('Đã đăng xuất','👋');
+  };
 
   return (
     <div className="flex min-h-screen font-sans bg-bg-chance selection:bg-black selection:text-white">
+      {/* No-account banner */}
+      {!user&&SB_URL&&(
+        <div className="fixed top-0 left-0 right-0 z-[400] bg-amber-500 text-white text-xs font-bold flex items-center justify-between px-4 py-2">
+          <span>⚠️ Chưa đăng nhập — dữ liệu sẽ mất khi tải lại trang</span>
+          <button onClick={()=>setShowAuth(true)} className="bg-white text-amber-600 px-3 py-1 rounded-xl font-bold hover:bg-amber-50">Đăng nhập ngay</button>
+        </div>
+      )}
       <Sidebar activePage={activePage} setActivePage={setActivePage} settings={settings} setSettings={setSettings}
-        user={user} onLogout={handleLogout} onSave={save} onLoadLatest={loadLatest} savedLabel={savedLabel}/>
-      <main className="flex-1 relative overflow-hidden">
-        {/* Load latest banner */}
-        <AnimatePresence>
-          {showLoadBanner&&(
-            <motion.div initial={{opacity:0,y:-40}} animate={{opacity:1,y:0}} exit={{opacity:0,y:-40}}
-              className="fixed top-4 left-1/2 -translate-x-1/2 z-[400] bg-white border border-zinc-200 shadow-xl rounded-2xl px-5 py-3 flex items-center gap-3 text-sm font-semibold">
-              <span>📂 Có bản lưu từ trước</span>
-              <button onClick={loadLatest} className="bg-black text-white px-3 py-1.5 rounded-xl text-xs font-bold hover:bg-zinc-800 transition-colors">Tải bản mới nhất</button>
-              <button onClick={dismissBanner} className="w-6 h-6 rounded-full bg-zinc-100 flex items-center justify-center hover:bg-zinc-200"><X className="w-3 h-3"/></button>
-            </motion.div>
-          )}
-        </AnimatePresence>
+        user={user} onLogout={handleLogout} onSyncClick={()=>user?pull():setShowAuth(true)} syncing={syncing}/>
+      <main className={cn('flex-1 relative overflow-hidden',!user&&SB_URL?'pt-9':'')}>
         <AnimatePresence mode="wait">
           <motion.div key={activePage} initial={{opacity:0,x:12}} animate={{opacity:1,x:0}} exit={{opacity:0,x:-12}} transition={{duration:0.2,ease:'easeInOut'}} className="min-h-screen">
             {activePage==='home'     &&<ErrorBoundary><HomePage tasks={tasks} habits={habits} setHabits={setHabits} finance={finance} setActivePage={setActivePage}/></ErrorBoundary>}
@@ -2008,9 +2024,9 @@ export default function App() {
           </motion.div>
         </AnimatePresence>
       </main>
-      <BottomNav activePage={activePage} setActivePage={setActivePage} onSave={save}/>
+      <BottomNav activePage={activePage} setActivePage={setActivePage} user={user} onSyncClick={()=>user?pull():setShowAuth(true)}/>
       <ToastContainer toasts={toasts}/>
-      <AnimatePresence>{showAuth&&<AuthModal onClose={()=>setShowAuth(false)} onLogin={(u)=>{setUser(u);addToast(`Xin chào, ${u.email}!`,'👋');}}/>}</AnimatePresence>
+      <AnimatePresence>{showAuth&&<AuthModal onClose={()=>setShowAuth(false)} onLogin={handleLogin}/>}</AnimatePresence>
     </div>
   );
 }
