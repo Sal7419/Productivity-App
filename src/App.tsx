@@ -1866,15 +1866,38 @@ function StatisticsPage({tasks,habits,finance,onReset}:{tasks:Task[];habits:Habi
 
 
 // ─── Save / Load Hook (replaces Supabase sync) ───────────────────────────────
-// ─── Save / Load Hook (Tích hợp Supabase) ───────────────────────────────
+// ─── Save / Load Hook (Tích hợp Supabase + Auto Refresh Token) ─────────────────
 const SAVE_KEY='chance-saved-snapshot';
 const SAVE_TS_KEY='chance-saved-ts';
 
+// Hàm kiểm tra và làm mới token
+async function ensureValidToken(user: AuthUser, setUser: (u: AuthUser | null) => void) {
+  // Nếu token còn sống hơn 5 phút thì cứ dùng bình thường
+  if (Date.now() < user.expiresAt - 5 * 60 * 1000) return user.token;
+
+  try {
+    const data = await sbRefresh(user.refreshToken);
+    const newUser: AuthUser = {
+      ...user,
+      token: data.access_token,
+      refreshToken: data.refresh_token ?? user.refreshToken,
+      expiresAt: Date.now() + (data.expires_in ?? 3600) * 1000,
+    };
+    setUser(newUser);
+    return newUser.token;
+  } catch (e) {
+    setUser(null); // Token refresh cũng chết thì bắt đăng nhập lại
+    throw new Error("Phiên đăng nhập đã hết hạn, vui lòng đăng nhập lại.");
+  }
+}
+
+// Hook chính (ĐÃ THÊM setUser VÀO THAM SỐ)
 function useSaveLoad(
   data: object,
   setData: (d:any)=>void,
   addToast: (t:string,e:string)=>void,
-  user: AuthUser | null // Thêm biến user vào đây
+  user: AuthUser | null,
+  setUser: (u: AuthUser | null) => void // Lỗi trắng màn hình là do thiếu dòng này ở bản trước!
 ) {
   const [savedAt,setSavedAt]=useState<string|null>(()=>localStorage.getItem(SAVE_TS_KEY));
   const [showLoadBanner,setShowLoadBanner]=useState(false);
@@ -1893,29 +1916,29 @@ function useSaveLoad(
     try {
       localStorage.setItem(SAVE_KEY, JSON.stringify(data));
       localStorage.setItem(SAVE_TS_KEY, ts);
+      setSavedAt(ts);
 
       if (user && user.userId) {
-        // KIỂM TRA VÀ LẤY TOKEN MỚI TRƯỚC KHI LƯU
         const validToken = await ensureValidToken(user, setUser);
         await sbSetData(validToken, user.userId, data);
-        addToast('Đã đồng bộ đám mây!', '☁️');
+        addToast('Đã lưu lên đám mây!', '☁️');
+      } else {
+        addToast('Đã lưu cục bộ!', '💾');
       }
-      setSavedAt(ts);
+      setShowLoadBanner(false);
     } catch(e: any) {
-      addToast(e.message || 'Lưu thất bại', '❌');
+      addToast('Lỗi: ' + (e.message || ''), '❌');
     }
   }, [data, user, setUser, addToast]);
 
   const loadLatest = useCallback(async () => {
     try {
       let d = null;
-
-      // 1. NẾU CÓ USER -> Ưu tiên kéo dữ liệu mới nhất từ Supabase
-      if (user && user.token && user.userId) {
-        d = await sbGetData(user.token, user.userId);
+      if (user && user.userId) {
+        const validToken = await ensureValidToken(user, setUser);
+        d = await sbGetData(validToken, user.userId);
       }
 
-      // 2. Nếu không có trên mạng hoặc chưa đăng nhập -> Lấy local
       if (!d) {
         const snap = localStorage.getItem(SAVE_KEY);
         if (!snap) { addToast('Chưa có bản lưu nào', '⚠️'); return; }
@@ -1926,9 +1949,9 @@ function useSaveLoad(
       setShowLoadBanner(false);
       addToast('Đã tải bản lưu mới nhất!', '📂');
     } catch(e: any) {
-      addToast('Lỗi tải dữ liệu: ' + (e.message || ''), '❌');
+      addToast('Lỗi tải: ' + (e.message || ''), '❌');
     }
-  }, [user, setData, addToast]); // Thêm user vào dependency
+  }, [user, setUser, setData, addToast]);
 
   const dismissBanner=()=>setShowLoadBanner(false);
 
@@ -1989,7 +2012,7 @@ export default function App() {
     if(d.notes)    setNotes(d.notes);
   },[setTasks,setHabits,setFinanceRaw,setSettings,setArchived,setSchedule,setNotes]);
 
-const {save,loadLatest,savedAt,showLoadBanner,dismissBanner} = useSaveLoad(syncPayload, applyData, addToast, user);
+const {save,loadLatest,savedAt,showLoadBanner,dismissBanner} = useSaveLoad(syncPayload, applyData, addToast, user, setUser);
 const setFinance=useCallback((f:FinanceState)=>setFinanceRaw(f),[setFinanceRaw]);
 
   // Task done → earn reward
