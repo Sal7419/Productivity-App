@@ -1866,121 +1866,54 @@ function StatisticsPage({tasks,habits,finance,onReset}:{tasks:Task[];habits:Habi
 
 
 // ─── Save / Load Hook (replaces Supabase sync) ───────────────────────────────
-// ─── Save / Load Hook (Tích hợp Supabase + Auto Refresh Token) ─────────────────
 const SAVE_KEY='chance-saved-snapshot';
 const SAVE_TS_KEY='chance-saved-ts';
 
-// Hàm kiểm tra và làm mới token
-async function ensureValidToken(user: AuthUser, setUser: (u: AuthUser | null) => void) {
-  // Nếu token còn sống hơn 5 phút thì cứ dùng bình thường
-  if (Date.now() < user.expiresAt - 5 * 60 * 1000) return user.token;
-
-  try {
-    const data = await sbRefresh(user.refreshToken);
-    const newUser: AuthUser = {
-      ...user,
-      token: data.access_token,
-      refreshToken: data.refresh_token ?? user.refreshToken,
-      expiresAt: Date.now() + (data.expires_in ?? 3600) * 1000,
-    };
-    setUser(newUser);
-    return newUser.token;
-  } catch (e) {
-    setUser(null); // Token refresh cũng chết thì bắt đăng nhập lại
-    throw new Error("Phiên đăng nhập đã hết hạn, vui lòng đăng nhập lại.");
-  }
-}
-
-// Hook chính (ĐÃ THÊM setUser VÀO THAM SỐ)
 function useSaveLoad(
   data: object,
   setData: (d:any)=>void,
   addToast: (t:string,e:string)=>void,
-  user: AuthUser | null,
-  setUser: (u: AuthUser | null) => void // Lỗi trắng màn hình là do thiếu dòng này ở bản trước!
 ) {
   const [savedAt,setSavedAt]=useState<string|null>(()=>localStorage.getItem(SAVE_TS_KEY));
   const [showLoadBanner,setShowLoadBanner]=useState(false);
 
+  // Check on mount if there's a newer saved snapshot vs current working data
   useEffect(()=>{
     const snap=localStorage.getItem(SAVE_KEY);
     const ts=localStorage.getItem(SAVE_TS_KEY);
     if(snap&&ts){
+      // Show banner if snapshot exists and was saved more than 10s ago (means it came from another session)
       const age=Date.now()-new Date(ts).getTime();
       if(age>10000) setShowLoadBanner(true);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   },[]);
 
-  const save = useCallback(async () => {
-    const ts = new Date().toISOString();
-    try {
-      localStorage.setItem(SAVE_KEY, JSON.stringify(data));
-      localStorage.setItem(SAVE_TS_KEY, ts);
+  const save=useCallback(()=>{
+    const ts=new Date().toISOString();
+    try{
+      localStorage.setItem(SAVE_KEY,JSON.stringify(data));
+      localStorage.setItem(SAVE_TS_KEY,ts);
       setSavedAt(ts);
-
-      if (user && user.userId) {
-        const validToken = await ensureValidToken(user, setUser);
-        await sbSetData(validToken, user.userId, data);
-        addToast('Đã lưu lên đám mây!', '☁️');
-      } else {
-        addToast('Đã lưu cục bộ!', '💾');
-      }
       setShowLoadBanner(false);
-    } catch(e: any) {
-      addToast('Lỗi: ' + (e.message || ''), '❌');
-    }
-  }, [data, user, setUser, addToast]);
+      addToast('Đã lưu bản hiện tại!','💾');
+    }catch{addToast('Lưu thất bại','❌');}
+  },[data,addToast]);
 
-  const loadLatest = useCallback(async () => {
-    try {
-      let d = null;
-      if (user && user.userId) {
-        const validToken = await ensureValidToken(user, setUser);
-        d = await sbGetData(validToken, user.userId);
-      }
-
-      if (!d) {
-        const snap = localStorage.getItem(SAVE_KEY);
-        if (!snap) { addToast('Chưa có bản lưu nào', '⚠️'); return; }
-        d = JSON.parse(snap);
-      }
-
+  const loadLatest=useCallback(()=>{
+    try{
+      const snap=localStorage.getItem(SAVE_KEY);
+      if(!snap){addToast('Chưa có bản lưu nào','⚠️');return;}
+      const d=JSON.parse(snap);
       setData(d);
       setShowLoadBanner(false);
-      addToast('Đã tải bản lưu mới nhất!', '📂');
-    } catch(e: any) {
-      addToast('Lỗi tải: ' + (e.message || ''), '❌');
-    }
-  }, [user, setUser, setData, addToast]);
+      addToast('Đã tải bản lưu gần nhất!','📂');
+    }catch{addToast('Tải thất bại','❌');}
+  },[setData,addToast]);
 
   const dismissBanner=()=>setShowLoadBanner(false);
 
-  return {save, loadLatest, savedAt, showLoadBanner, dismissBanner};
-}
-
-// Thêm hàm bổ trợ này vào trong App.tsx hoặc bên ngoài hook
-async function ensureValidToken(user: AuthUser, setUser: (u: AuthUser | null) => void) {
-  // Nếu còn hơn 5 phút nữa mới hết hạn thì không cần refresh
-  if (Date.now() < user.expiresAt - 5 * 60 * 1000) return user.token;
-
-  try {
-    console.log("Token sắp hết hạn, đang refresh...");
-    const data = await sbRefresh(user.refreshToken);
-
-    const newUser: AuthUser = {
-      ...user,
-      token: data.access_token,
-      refreshToken: data.refresh_token ?? user.refreshToken,
-      expiresAt: Date.now() + (data.expires_in ?? 3600) * 1000,
-    };
-
-    setUser(newUser); // Cập nhật lại state và localStorage
-    return newUser.token;
-  } catch (e) {
-    console.error("Không thể refresh token:", e);
-    setUser(null); // Nếu lỗi (ví dụ refresh token cũng hết hạn), bắt đăng nhập lại
-    throw new Error("Phiên đăng nhập hết hạn, vui lòng đăng nhập lại.");
-  }
+  return{save,loadLatest,savedAt,showLoadBanner,dismissBanner};
 }
 
 // ─── App Root ─────────────────────────────────────────────────────────────────
@@ -2012,8 +1945,8 @@ export default function App() {
     if(d.notes)    setNotes(d.notes);
   },[setTasks,setHabits,setFinanceRaw,setSettings,setArchived,setSchedule,setNotes]);
 
-const {save,loadLatest,savedAt,showLoadBanner,dismissBanner} = useSaveLoad(syncPayload, applyData, addToast, user, setUser);
-const setFinance=useCallback((f:FinanceState)=>setFinanceRaw(f),[setFinanceRaw]);
+  const {save,loadLatest,savedAt,showLoadBanner,dismissBanner}=useSaveLoad(syncPayload,applyData,addToast);
+  const setFinance=useCallback((f:FinanceState)=>setFinanceRaw(f),[setFinanceRaw]);
 
   // Task done → earn reward
   const handleTaskDone=useCallback((task:Task)=>{
