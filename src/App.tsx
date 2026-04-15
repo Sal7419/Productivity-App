@@ -236,9 +236,9 @@ const NAV_ITEMS=[
   {id:'stats',    icon:BarChart3,   label:'Stats'},
 ];
 
-function Sidebar({activePage,setActivePage,settings,setSettings,user,onLogout,onSyncClick,syncing}:
+function Sidebar({activePage,setActivePage,settings,setSettings,user,onLogout,onSave,onLoadLatest,savedLabel}:
   {activePage:string;setActivePage:(p:string)=>void;settings:AppSettings;setSettings:(s:AppSettings)=>void;
-   user:AuthUser|null;onLogout:()=>void;onSyncClick:()=>void;syncing:boolean;}) {
+   user:AuthUser|null;onLogout:()=>void;onSave:()=>void;onLoadLatest:()=>void;savedLabel:string|null;}) {
   return (
     <aside className="hidden md:flex w-56 h-screen bg-sidebar-dark text-zinc-400 p-4 flex-col gap-4 sticky top-0 z-50 shrink-0 overflow-y-auto no-scrollbar">
       <div className="flex items-center gap-2.5 mb-1 cursor-pointer" onClick={()=>setActivePage('home')}>
@@ -267,30 +267,32 @@ function Sidebar({activePage,setActivePage,settings,setSettings,user,onLogout,on
         </div>
       </div>
       <div className="mt-auto border-t border-white/10 pt-3 flex flex-col gap-1.5">
+        <button onClick={onSave} className="flex items-center gap-2 px-3 py-2.5 rounded-2xl text-xs font-bold text-white hover:bg-white/10 transition-colors" style={{backgroundColor:'var(--ac)'}}>
+          <Check className="w-3.5 h-3.5"/>Lưu bản hiện tại
+        </button>
+        {savedLabel&&(
+          <p className="text-[10px] text-zinc-500 px-3">Lưu lúc {savedLabel}</p>
+        )}
+        <button onClick={onLoadLatest} className="flex items-center gap-2 px-3 py-2 rounded-2xl text-xs font-bold text-zinc-300 hover:text-white hover:bg-white/5 transition-colors">
+          <RefreshCw className="w-3.5 h-3.5"/>Tải bản mới nhất
+        </button>
         {user?(
           <>
-            <div className="flex items-center gap-2 px-1">
+            <div className="flex items-center gap-2 px-1 mt-1">
               <div className="w-6 h-6 rounded-full bg-white/20 flex items-center justify-center shrink-0"><User className="w-3.5 h-3.5 text-white"/></div>
               <span className="text-xs text-zinc-300 font-semibold truncate flex-1">{user.email}</span>
             </div>
-            <button onClick={onSyncClick} className={cn('flex items-center gap-2 px-3 py-2 rounded-2xl text-xs font-bold text-emerald-400 hover:bg-white/5 transition-colors',syncing&&'opacity-60')}>
-              <RefreshCw className={cn('w-3.5 h-3.5',syncing&&'animate-spin')}/>{syncing?'Đang đồng bộ...':'Đồng bộ ngay'}
-            </button>
             <button onClick={onLogout} className="flex items-center gap-2 px-3 py-2 rounded-2xl text-xs font-bold text-red-400 hover:bg-red-400/10 transition-colors">
               <LogOut className="w-3.5 h-3.5"/>Đăng xuất
             </button>
           </>
-        ):(
-          <button onClick={onSyncClick} className="flex items-center gap-2 px-3 py-2 rounded-2xl text-xs font-bold text-zinc-300 hover:text-white hover:bg-white/5 transition-colors">
-            <LogIn className="w-3.5 h-3.5"/>Đăng nhập / Tạo tài khoản
-          </button>
-        )}
+        ):null}
       </div>
     </aside>
   );
 }
 
-function BottomNav({activePage,setActivePage,user,onSyncClick}:{activePage:string;setActivePage:(p:string)=>void;user:AuthUser|null;onSyncClick:()=>void}) {
+function BottomNav({activePage,setActivePage,onSave}:{activePage:string;setActivePage:(p:string)=>void;onSave:()=>void;}) {
   return (
     <nav className="md:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-zinc-100 z-50 flex overflow-x-auto no-scrollbar">
       {NAV_ITEMS.map(item=>(
@@ -300,11 +302,9 @@ function BottomNav({activePage,setActivePage,user,onSyncClick}:{activePage:strin
           <span className="text-[8px] font-semibold">{item.label}</span>
         </button>
       ))}
-      {/* Mobile login/sync button */}
-      <button onClick={onSyncClick}
-        className={cn('flex-1 min-w-[44px] flex flex-col items-center gap-0.5 py-2 transition-colors',user?'text-emerald-500':'text-zinc-400')}>
-        <User className="w-4 h-4"/>
-        <span className="text-[8px] font-semibold">{user?'Sync':'Login'}</span>
+      <button onClick={onSave} className="flex-1 min-w-[44px] flex flex-col items-center gap-0.5 py-2 transition-colors text-zinc-400 hover:text-black">
+        <Check className="w-4 h-4"/>
+        <span className="text-[8px] font-semibold">Lưu</span>
       </button>
     </nav>
   );
@@ -1144,11 +1144,11 @@ function SchedulePage({events,setEvents}:{events:ScheduleEvent[];setEvents:(e:Sc
                 </div>
               ))}
             </div>
-            <div className="flex">
+            <div className="flex" style={{paddingTop:'10px'}}>
               <div className="shrink-0" style={{width:'60px'}}>
                 {HOURS.map(h=>(
-                  <div key={h} style={{height:`${HOUR_H}px`}} className="flex items-start justify-end pr-3 border-t border-zinc-200 first:border-t-0">
-                    <span className="text-xs font-bold text-zinc-500 -translate-y-2.5">{String(h).padStart(2,'0')}:00</span>
+                  <div key={h} style={{height:`${HOUR_H}px`}} className="flex items-start justify-end pr-3">
+                    <span className="text-xs font-bold text-zinc-500 -translate-y-2">{String(h).padStart(2,'0')}:00</span>
                   </div>
                 ))}
               </div>
@@ -1865,76 +1865,55 @@ function StatisticsPage({tasks,habits,finance,onReset}:{tasks:Task[];habits:Habi
 }
 
 
-// ─── Supabase Sync Hook ───────────────────────────────────────────────────────
-function useSupabaseSync(
-  user: AuthUser|null,
+// ─── Save / Load Hook (replaces Supabase sync) ───────────────────────────────
+const SAVE_KEY='chance-saved-snapshot';
+const SAVE_TS_KEY='chance-saved-ts';
+
+function useSaveLoad(
   data: object,
   setData: (d:any)=>void,
-  setUser: (u:AuthUser|null)=>void,
+  addToast: (t:string,e:string)=>void,
 ) {
-  const [syncing,setSyncing]=useState(false);
-  // `ready` = initial pull done; don't push until then to avoid overwriting server data
-  const ready=useRef(false);
-  const debRef=useRef<ReturnType<typeof setTimeout>|null>(null);
-  const dataRef=useRef(data);
-  dataRef.current=data;
+  const [savedAt,setSavedAt]=useState<string|null>(()=>localStorage.getItem(SAVE_TS_KEY));
+  const [showLoadBanner,setShowLoadBanner]=useState(false);
 
-  // Refresh token if expired (<5 min left)
-  const getValidToken=useCallback(async():Promise<string|null>=>{
-    if(!user)return null;
-    const fiveMin=5*60*1000;
-    if(user.expiresAt>Date.now()+fiveMin) return user.token;
-    if(!user.refreshToken) return user.token;
-    try{
-      const r=await sbRefresh(user.refreshToken);
-      const updated:AuthUser={...user,token:r.access_token,refreshToken:r.refresh_token??user.refreshToken,expiresAt:Date.now()+(r.expires_in??3600)*1000};
-      setUser(updated);
-      return r.access_token;
-    }catch{return user.token;}
-  },[user,setUser]);
-
-  const push=useCallback(async(payload:object)=>{
-    if(!user||!SB_URL||!ready.current)return;
-    try{
-      const token=await getValidToken();
-      if(token) await sbSetData(token,user.userId,payload);
-    }catch{}
-  },[user,getValidToken]);
-
-  const pull=useCallback(async()=>{
-    if(!user||!SB_URL)return;
-    setSyncing(true);
-    try{
-      const token=await getValidToken();
-      if(!token)return;
-      const d=await sbGetData(token,user.userId);
-      if(d) setData(d);
-    }catch{}finally{
-      setSyncing(false);
-      ready.current=true; // allow push after first pull
-    }
-  },[user,setData,getValidToken]);
-
-  // Auto-pull on mount (or when user changes) — this is the KEY fix
+  // Check on mount if there's a newer saved snapshot vs current working data
   useEffect(()=>{
-    ready.current=false; // reset on user change
-    if(user&&SB_URL){
-      pull();
-    } else {
-      ready.current=true; // no user → allow push immediately
+    const snap=localStorage.getItem(SAVE_KEY);
+    const ts=localStorage.getItem(SAVE_TS_KEY);
+    if(snap&&ts){
+      // Show banner if snapshot exists and was saved more than 10s ago (means it came from another session)
+      const age=Date.now()-new Date(ts).getTime();
+      if(age>10000) setShowLoadBanner(true);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[user?.userId]);
+  },[]);
 
-  // Debounced auto-push when data changes — only after pull is done
-  useEffect(()=>{
-    if(!user||!SB_URL)return;
-    if(debRef.current)clearTimeout(debRef.current);
-    debRef.current=setTimeout(()=>{if(ready.current)push(dataRef.current);},2000);
-    return()=>{if(debRef.current)clearTimeout(debRef.current);};
-  },[data,user,push]);
+  const save=useCallback(()=>{
+    const ts=new Date().toISOString();
+    try{
+      localStorage.setItem(SAVE_KEY,JSON.stringify(data));
+      localStorage.setItem(SAVE_TS_KEY,ts);
+      setSavedAt(ts);
+      setShowLoadBanner(false);
+      addToast('Đã lưu bản hiện tại!','💾');
+    }catch{addToast('Lưu thất bại','❌');}
+  },[data,addToast]);
 
-  return{syncing,pull};
+  const loadLatest=useCallback(()=>{
+    try{
+      const snap=localStorage.getItem(SAVE_KEY);
+      if(!snap){addToast('Chưa có bản lưu nào','⚠️');return;}
+      const d=JSON.parse(snap);
+      setData(d);
+      setShowLoadBanner(false);
+      addToast('Đã tải bản lưu gần nhất!','📂');
+    }catch{addToast('Tải thất bại','❌');}
+  },[setData,addToast]);
+
+  const dismissBanner=()=>setShowLoadBanner(false);
+
+  return{save,loadLatest,savedAt,showLoadBanner,dismissBanner};
 }
 
 // ─── App Root ─────────────────────────────────────────────────────────────────
@@ -1956,7 +1935,7 @@ export default function App() {
   const allCategories=useMemo(()=>[...DEFAULT_CATEGORIES,...settings.customCategories.filter(c=>!DEFAULT_CATEGORIES.includes(c))],[settings.customCategories]);
   const syncPayload=useMemo(()=>({tasks,habits,finance,settings,archived,schedule,notes}),[tasks,habits,finance,settings,archived,schedule,notes]);
 
-  const applyServerData=useCallback((d:any)=>{
+  const applyData=useCallback((d:any)=>{
     if(d.tasks)    setTasks(d.tasks);
     if(d.habits)   setHabits(d.habits);
     if(d.finance)  setFinanceRaw(d.finance);
@@ -1964,10 +1943,9 @@ export default function App() {
     if(d.archived) setArchived(d.archived);
     if(d.schedule) setSchedule(d.schedule);
     if(d.notes)    setNotes(d.notes);
-    addToast('Đồng bộ thành công!','☁️');
-  },[setTasks,setHabits,setFinanceRaw,setSettings,setArchived,setSchedule,setNotes,addToast]);
+  },[setTasks,setHabits,setFinanceRaw,setSettings,setArchived,setSchedule,setNotes]);
 
-  const {syncing,pull}=useSupabaseSync(user,syncPayload,applyServerData,setUser);
+  const {save,loadLatest,savedAt,showLoadBanner,dismissBanner}=useSaveLoad(syncPayload,applyData,addToast);
   const setFinance=useCallback((f:FinanceState)=>setFinanceRaw(f),[setFinanceRaw]);
 
   // Task done → earn reward
@@ -1995,18 +1973,27 @@ export default function App() {
     addToast('Đã reset toàn bộ dữ liệu','🔄');
   },[setTasks,setHabits,setFinanceRaw,setSettings,setArchived,setSchedule,setNotes,addToast]);
 
-  const handleLogin=(u:AuthUser)=>{
-    setUser(u);
-    addToast(`Xin chào, ${u.email}!`,'👋');
-    // pull() called automatically by useSupabaseSync's useEffect when user changes
-  };
   const handleLogout=()=>{setUser(null);addToast('Đã đăng xuất','👋');};
+
+  // Format savedAt timestamp nicely
+  const savedLabel=savedAt?new Date(savedAt).toLocaleTimeString('vi-VN',{hour:'2-digit',minute:'2-digit',day:'2-digit',month:'2-digit'}):null;
 
   return (
     <div className="flex min-h-screen font-sans bg-bg-chance selection:bg-black selection:text-white">
       <Sidebar activePage={activePage} setActivePage={setActivePage} settings={settings} setSettings={setSettings}
-        user={user} onLogout={handleLogout} onSyncClick={()=>user?pull():setShowAuth(true)} syncing={syncing}/>
+        user={user} onLogout={handleLogout} onSave={save} onLoadLatest={loadLatest} savedLabel={savedLabel}/>
       <main className="flex-1 relative overflow-hidden">
+        {/* Load latest banner */}
+        <AnimatePresence>
+          {showLoadBanner&&(
+            <motion.div initial={{opacity:0,y:-40}} animate={{opacity:1,y:0}} exit={{opacity:0,y:-40}}
+              className="fixed top-4 left-1/2 -translate-x-1/2 z-[400] bg-white border border-zinc-200 shadow-xl rounded-2xl px-5 py-3 flex items-center gap-3 text-sm font-semibold">
+              <span>📂 Có bản lưu từ trước</span>
+              <button onClick={loadLatest} className="bg-black text-white px-3 py-1.5 rounded-xl text-xs font-bold hover:bg-zinc-800 transition-colors">Tải bản mới nhất</button>
+              <button onClick={dismissBanner} className="w-6 h-6 rounded-full bg-zinc-100 flex items-center justify-center hover:bg-zinc-200"><X className="w-3 h-3"/></button>
+            </motion.div>
+          )}
+        </AnimatePresence>
         <AnimatePresence mode="wait">
           <motion.div key={activePage} initial={{opacity:0,x:12}} animate={{opacity:1,x:0}} exit={{opacity:0,x:-12}} transition={{duration:0.2,ease:'easeInOut'}} className="min-h-screen">
             {activePage==='home'     &&<ErrorBoundary><HomePage tasks={tasks} habits={habits} setHabits={setHabits} finance={finance} setActivePage={setActivePage}/></ErrorBoundary>}
@@ -2021,9 +2008,9 @@ export default function App() {
           </motion.div>
         </AnimatePresence>
       </main>
-      <BottomNav activePage={activePage} setActivePage={setActivePage} user={user} onSyncClick={()=>user?pull():setShowAuth(true)}/>
+      <BottomNav activePage={activePage} setActivePage={setActivePage} onSave={save}/>
       <ToastContainer toasts={toasts}/>
-      <AnimatePresence>{showAuth&&<AuthModal onClose={()=>setShowAuth(false)} onLogin={handleLogin}/>}</AnimatePresence>
+      <AnimatePresence>{showAuth&&<AuthModal onClose={()=>setShowAuth(false)} onLogin={(u)=>{setUser(u);addToast(`Xin chào, ${u.email}!`,'👋');}}/>}</AnimatePresence>
     </div>
   );
 }
