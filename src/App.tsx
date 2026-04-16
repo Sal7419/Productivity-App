@@ -68,6 +68,13 @@ function formatVND(n: number) {
 }
 function todayIndex() { return (new Date().getDay()+6)%7; }
 function todayStr()   { return new Date().toISOString().split('T')[0]; }
+function getISOWeek(d=new Date()):string {
+  const date=new Date(d); date.setHours(0,0,0,0);
+  date.setDate(date.getDate()+3-(date.getDay()+6)%7);
+  const w1=new Date(date.getFullYear(),0,4);
+  const wn=1+Math.round(((date.getTime()-w1.getTime())/86400000-3+(w1.getDay()+6)%7)/7);
+  return `${date.getFullYear()}-W${String(wn).padStart(2,'0')}`;
+}
 
 // ─── Supabase helpers (no SDK needed — direct REST) ───────────────────────────
 const SB_URL = (import.meta as any).env?.VITE_SUPABASE_URL  ?? '';
@@ -109,7 +116,7 @@ async function sbSetData(token: string, uid: string, data: object) {
 type Priority = 'high'|'medium'|'low';
 type Status   = 'todo'|'in-progress'|'done';
 interface Task { id:string;title:string;status:Status;priority:Priority;category:string;deadline:string;createdAt:string;tags:string[];archivedAt?:string; }
-interface Habit{ id:string;name:string;streak:number;completed:boolean[];group:'study'|'life'; }
+interface Habit{ id:string;name:string;streak:number;weeklyStreak:number;completed:boolean[];group:'study'|'life';lastResetWeek:string; }
 interface Transaction{ id:string;type:'income'|'expense'|'reward';amount:number;note:string;date:string;taskTitle?:string; }
 interface FinanceState{ rewardPerTask:number;transactions:Transaction[]; }
 interface AuthUser{ email:string;token:string;userId:string;refreshToken:string;expiresAt:number; }
@@ -149,12 +156,12 @@ const INIT_TASKS: Task[] = [
   {id:'5',title:'Flutter Masterclass',status:'todo',priority:'high',category:'Study',deadline:'2026-04-13',createdAt:'2026-04-04',tags:['#flutter']},
 ];
 const INIT_HABITS: Habit[] = [
-  {id:'s1',name:'Đọc sách 30 phút',streak:5,completed:[true,true,true,true,true,false,false],group:'study'},
-  {id:'s2',name:'Luyện code',streak:12,completed:[true,true,true,true,true,true,true],group:'study'},
-  {id:'s3',name:'Học từ mới',streak:3,completed:[false,false,true,true,true,false,false],group:'study'},
-  {id:'l1',name:'Tập thể dục sáng',streak:7,completed:[true,true,true,true,true,true,true],group:'life'},
-  {id:'l2',name:'Uống 2L nước',streak:20,completed:[true,true,true,true,true,true,true],group:'life'},
-  {id:'l3',name:'Thiền định',streak:2,completed:[false,false,false,false,true,true,false],group:'life'},
+  {id:'s1',name:'Đọc sách 30 phút',streak:5,weeklyStreak:2,completed:[true,true,true,true,true,false,false],group:'study',lastResetWeek:getISOWeek()},
+  {id:'s2',name:'Luyện code',streak:7,weeklyStreak:4,completed:[true,true,true,true,true,true,true],group:'study',lastResetWeek:getISOWeek()},
+  {id:'s3',name:'Học từ mới',streak:3,weeklyStreak:1,completed:[false,false,true,true,true,false,false],group:'study',lastResetWeek:getISOWeek()},
+  {id:'l1',name:'Tập thể dục sáng',streak:7,weeklyStreak:5,completed:[true,true,true,true,true,true,true],group:'life',lastResetWeek:getISOWeek()},
+  {id:'l2',name:'Uống 2L nước',streak:7,weeklyStreak:8,completed:[true,true,true,true,true,true,true],group:'life',lastResetWeek:getISOWeek()},
+  {id:'l3',name:'Thiền định',streak:2,weeklyStreak:0,completed:[false,false,false,false,true,true,false],group:'life',lastResetWeek:getISOWeek()},
 ];
 const INIT_FINANCE: FinanceState = {
   rewardPerTask:10000,
@@ -296,28 +303,8 @@ function Sidebar({activePage,setActivePage,settings,setSettings,user,onLogout,on
   );
 }
 
-function BottomNav({activePage,setActivePage,user,onSyncClick}:{activePage:string;setActivePage:(p:string)=>void;user:AuthUser|null;onSyncClick:()=>void}) {
-  return (
-    <nav className="md:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-zinc-100 z-50 flex overflow-x-auto no-scrollbar">
-      {NAV_ITEMS.map(item=>(
-        <button key={item.id} onClick={()=>setActivePage(item.id)}
-          className={cn('flex-1 min-w-[44px] flex flex-col items-center gap-0.5 py-2 transition-colors',activePage===item.id?'text-black':'text-zinc-400')}>
-          <item.icon className="w-4 h-4"/>
-          <span className="text-[8px] font-semibold">{item.label}</span>
-        </button>
-      ))}
-      {/* Mobile login/sync button */}
-      <button onClick={onSyncClick}
-        className={cn('flex-1 min-w-[44px] flex flex-col items-center gap-0.5 py-2 transition-colors',user?'text-emerald-500':'text-zinc-400')}>
-        <User className="w-4 h-4"/>
-        <span className="text-[8px] font-semibold">{user?'Sync':'Login'}</span>
-      </button>
-    </nav>
-  );
-}
-
-// ─── Auth Modal (Supabase) ────────────────────────────────────────────────────
-function AuthModal({onClose,onLogin}:{onClose:()=>void;onLogin:(u:AuthUser)=>void}) {
+// ─── Auth Page (full screen) ──────────────────────────────────────────────────
+function AuthPage({onLogin,onBack}:{onLogin:(u:AuthUser)=>void;onBack:()=>void}) {
   const [tab,setTab]=useState<'login'|'register'>('login');
   const [email,setEmail]=useState('');
   const [password,setPassword]=useState('');
@@ -326,60 +313,190 @@ function AuthModal({onClose,onLogin}:{onClose:()=>void;onLogin:(u:AuthUser)=>voi
   const noSB=!SB_URL||!SB_KEY;
 
   const submit=async()=>{
-    if(!email.trim()||!password.trim()){setError('Vui lòng điền đầy đủ thông tin.');return;}
+    if(!email.trim()||!password.trim()){setError('Vui lòng điền đầy đủ.');return;}
     if(noSB){setError('Chưa cấu hình Supabase. Xem SETUP_SUPABASE.md.');return;}
     setLoading(true);setError('');
-    try {
+    try{
       const data=tab==='register'?await sbRegister(email,password):await sbLogin(email,password);
-      const token=data.access_token;
-      const refreshToken=data.refresh_token??'';
-      const userId=data.user?.id??data.id;
-      const expiresAt=Date.now()+(data.expires_in??3600)*1000;
-      if(!token||!userId) throw new Error(data.error_description??data.msg??'Đăng nhập thất bại.');
+      const token=data.access_token;const refreshToken=data.refresh_token??'';
+      const userId=data.user?.id??data.id;const expiresAt=Date.now()+(data.expires_in??3600)*1000;
+      if(!token||!userId)throw new Error(data.error_description??data.msg??'Thất bại.');
       onLogin({email:data.user?.email??email,token,userId,refreshToken,expiresAt});
-      onClose();
-    } catch(e:any){setError(e.message??'Đã có lỗi.');}
+    }catch(e:any){setError(e.message??'Đã có lỗi.');}
     finally{setLoading(false);}
   };
 
   return (
-    <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-[200] p-4">
-      <motion.div initial={{opacity:0,scale:0.95}} animate={{opacity:1,scale:1}} exit={{opacity:0,scale:0.95}}
-        className="bg-white rounded-[2rem] p-7 w-full max-w-sm shadow-2xl">
-        <div className="flex justify-between items-center mb-5">
-          <h2 className="text-xl font-bold">Đồng bộ đa thiết bị</h2>
-          <button onClick={onClose} className="w-8 h-8 rounded-full bg-zinc-100 flex items-center justify-center"><X className="w-4 h-4"/></button>
+    <div className="min-h-screen bg-bg-chance flex flex-col">
+      {/* Header */}
+      <div className="flex items-center justify-between p-5">
+        <button onClick={onBack} className="w-10 h-10 bg-white rounded-2xl flex items-center justify-center shadow-sm border border-zinc-100 hover:bg-zinc-50">
+          <ChevronLeft className="w-5 h-5"/>
+        </button>
+        <div className="flex items-center gap-2">
+          <div className="w-8 h-8 rounded-xl flex items-center justify-center" style={{backgroundColor:'var(--ac)'}}>
+            <CheckCircle2 className="w-4 h-4 text-white"/>
+          </div>
+          <span className="text-lg font-bold tracking-tight">chance</span>
         </div>
-        <div className="flex gap-2 mb-5">
-          {(['login','register']as const).map(t=>(
-            <button key={t} onClick={()=>setTab(t)}
-              className={cn('flex-1 py-2 rounded-2xl text-sm font-bold transition-all',tab===t?'bg-black text-white':'bg-zinc-100 text-zinc-500')}>
-              {t==='login'?'Đăng nhập':'Tạo tài khoản'}
+        <div className="w-10"/>
+      </div>
+
+      {/* Content */}
+      <div className="flex-1 flex flex-col items-center justify-center px-6 pb-20">
+        {/* Illustration */}
+        <div className="w-20 h-20 rounded-[2rem] flex items-center justify-center mb-6 shadow-xl" style={{backgroundColor:'var(--ac)'}}>
+          <User className="w-10 h-10 text-white"/>
+        </div>
+        <h1 className="text-3xl font-black tracking-tight mb-1 text-center">
+          {tab==='login'?'Xin chào!':'Tạo tài khoản'}
+        </h1>
+        <p className="text-zinc-400 text-sm text-center mb-8">
+          {tab==='login'?'Đăng nhập để đồng bộ dữ liệu của bạn':'Đăng ký miễn phí — dữ liệu lưu trên cloud'}
+        </p>
+
+        {/* Card */}
+        <div className="w-full max-w-sm bg-white rounded-[2rem] p-7 shadow-xl border border-zinc-100">
+          {/* Tabs */}
+          <div className="flex gap-2 mb-5 p-1 bg-zinc-100 rounded-2xl">
+            {(['login','register']as const).map(t=>(
+              <button key={t} onClick={()=>{setTab(t);setError('');}}
+                className={cn('flex-1 py-2.5 rounded-xl text-sm font-bold transition-all',tab===t?'bg-white text-black shadow-sm':'text-zinc-500')}>
+                {t==='login'?'Đăng nhập':'Đăng ký'}
+              </button>
+            ))}
+          </div>
+
+          {noSB&&(
+            <div className="bg-amber-50 border border-amber-200 rounded-2xl p-3 mb-4 text-xs text-amber-700 font-semibold">
+              ⚠️ Chưa cấu hình Supabase. Tạo file <code>.env.local</code> với VITE_SUPABASE_URL và VITE_SUPABASE_ANON.
+            </div>
+          )}
+
+          <div className="flex flex-col gap-3">
+            <div>
+              <label className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-1.5 block">Email</label>
+              <input type="email" placeholder="you@example.com" value={email} onChange={e=>setEmail(e.target.value)}
+                className="w-full bg-zinc-50 border-2 border-zinc-100 rounded-2xl px-4 py-3 font-semibold outline-none focus:border-black transition-colors"/>
+            </div>
+            <div>
+              <label className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-1.5 block">Mật khẩu</label>
+              <input type="password" placeholder="Tối thiểu 6 ký tự" value={password} onChange={e=>setPassword(e.target.value)}
+                onKeyDown={e=>e.key==='Enter'&&submit()}
+                className="w-full bg-zinc-50 border-2 border-zinc-100 rounded-2xl px-4 py-3 font-semibold outline-none focus:border-black transition-colors"/>
+            </div>
+            <AnimatePresence>
+              {error&&<motion.p initial={{opacity:0,y:-4}} animate={{opacity:1,y:0}} exit={{opacity:0}} className="text-xs text-red-500 font-semibold px-1">{error}</motion.p>}
+            </AnimatePresence>
+          </div>
+
+          <button onClick={submit} disabled={loading}
+            className="mt-5 w-full text-white py-4 rounded-2xl font-bold transition-all disabled:opacity-60 hover:opacity-90 shadow-lg"
+            style={{backgroundColor:'var(--ac)'}}>
+            {loading?'Đang xử lý...':(tab==='login'?'Đăng nhập & Đồng bộ':'Tạo tài khoản')}
+          </button>
+        </div>
+
+        <p className="text-center text-[11px] text-zinc-400 mt-5">
+          ☁️ Dữ liệu lưu trên Supabase · Đồng bộ mọi thiết bị
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// ─── Mobile Header ────────────────────────────────────────────────────────────
+function MobileHeader({title,activePage,setActivePage,user,onSyncClick,syncing}:{
+  title:string;activePage:string;setActivePage:(p:string)=>void;
+  user:AuthUser|null;onSyncClick:()=>void;syncing:boolean;
+}) {
+  return (
+    <header className="md:hidden sticky top-0 z-40 bg-white/80 backdrop-blur-sm border-b border-zinc-100 px-4 py-3 flex items-center justify-between">
+      <button onClick={()=>setActivePage('home')} className="flex items-center gap-2">
+        <div className="w-7 h-7 rounded-xl flex items-center justify-center shrink-0" style={{backgroundColor:'var(--ac)'}}>
+          <CheckCircle2 className="w-4 h-4 text-white"/>
+        </div>
+        <span className="text-base font-black tracking-tight">chance</span>
+      </button>
+      <h1 className="text-sm font-bold text-zinc-500">{title}</h1>
+      <button onClick={onSyncClick}
+        className={cn('w-8 h-8 rounded-full flex items-center justify-center transition-colors',user?'bg-emerald-100 text-emerald-600':'bg-zinc-100 text-zinc-500')}>
+        {syncing?<RefreshCw className="w-4 h-4 animate-spin"/>:user?<User className="w-4 h-4"/>:<LogIn className="w-4 h-4"/>}
+      </button>
+    </header>
+  );
+}
+
+// ─── Bottom Nav (redesigned for mobile) ──────────────────────────────────────
+const NAV_PRIMARY=[
+  {id:'home',     icon:Home,         label:'Home'},
+  {id:'tasks',    icon:ListTodo,     label:'Tasks'},
+  {id:'habits',   icon:Flame,        label:'Habits'},
+  {id:'finance',  icon:Wallet,       label:'Finance'},
+  {id:'notes',    icon:StickyNote,   label:'Notes'},
+];
+const NAV_MORE=[
+  {id:'pomodoro', icon:Timer,        label:'Pomodoro'},
+  {id:'kanban',   icon:Trello,       label:'Kanban'},
+  {id:'schedule', icon:CalendarDays, label:'Schedule'},
+  {id:'stats',    icon:BarChart3,    label:'Stats'},
+];
+
+function BottomNav({activePage,setActivePage,user,onSyncClick,syncing}:{
+  activePage:string;setActivePage:(p:string)=>void;user:AuthUser|null;onSyncClick:()=>void;syncing:boolean;
+}) {
+  const [showMore,setShowMore]=useState(false);
+  const isMore=NAV_MORE.some(n=>n.id===activePage);
+  return (
+    <>
+      {/* More drawer */}
+      <AnimatePresence>
+        {showMore&&(
+          <>
+            <motion.div initial={{opacity:0}} animate={{opacity:1}} exit={{opacity:0}}
+              className="md:hidden fixed inset-0 z-40" onClick={()=>setShowMore(false)}/>
+            <motion.div initial={{opacity:0,y:20}} animate={{opacity:1,y:0}} exit={{opacity:0,y:20}}
+              className="md:hidden fixed bottom-20 left-4 right-4 z-50 bg-white rounded-[2rem] shadow-2xl border border-zinc-100 p-4">
+              <div className="grid grid-cols-4 gap-2">
+                {NAV_MORE.map(item=>(
+                  <button key={item.id} onClick={()=>{setActivePage(item.id);setShowMore(false);}}
+                    className={cn('flex flex-col items-center gap-1.5 py-3 px-2 rounded-2xl transition-all',activePage===item.id?'text-white':'text-zinc-500 hover:bg-zinc-50')}
+                    style={activePage===item.id?{backgroundColor:'var(--ac)'}:{}}>
+                    <item.icon className="w-5 h-5"/>
+                    <span className="text-[10px] font-bold">{item.label}</span>
+                  </button>
+                ))}
+              </div>
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
+
+      {/* Main tab bar */}
+      <nav className="md:hidden fixed bottom-0 left-0 right-0 z-50 bg-white/95 backdrop-blur-md border-t border-zinc-100">
+        <div className="flex items-center px-2 py-1">
+          {NAV_PRIMARY.map(item=>(
+            <button key={item.id} onClick={()=>{setActivePage(item.id);setShowMore(false);}}
+              className={cn('flex-1 flex flex-col items-center gap-0.5 py-2 px-1 rounded-2xl transition-all',
+                activePage===item.id?'text-black':'text-zinc-400 hover:text-zinc-600')}>
+              <div className={cn('w-8 h-8 flex items-center justify-center rounded-2xl transition-all',activePage===item.id?'bg-zinc-100':'')} style={activePage===item.id?{}:{}}>
+                <item.icon className={cn('transition-all',activePage===item.id?'w-5 h-5':'w-4.5 h-4.5 w-[18px] h-[18px]')}/>
+              </div>
+              <span className={cn('text-[9px] font-semibold transition-all',activePage===item.id?'font-black':'')}>{item.label}</span>
             </button>
           ))}
+          {/* More button */}
+          <button onClick={()=>setShowMore(s=>!s)}
+            className={cn('flex-1 flex flex-col items-center gap-0.5 py-2 px-1 rounded-2xl transition-all',
+              isMore||showMore?'text-black':'text-zinc-400 hover:text-zinc-600')}>
+            <div className={cn('w-8 h-8 flex items-center justify-center rounded-2xl',isMore||showMore?'bg-zinc-100':'')}>
+              <LayoutGrid className="w-[18px] h-[18px]"/>
+            </div>
+            <span className={cn('text-[9px] font-semibold',isMore||showMore?'font-black':'')}>{isMore?NAV_MORE.find(n=>n.id===activePage)?.label:'Thêm'}</span>
+          </button>
         </div>
-        {noSB&&(
-          <div className="bg-amber-50 border border-amber-200 rounded-2xl p-3 mb-4 text-xs text-amber-700 font-semibold">
-            ⚠️ Chưa cấu hình Supabase. Tạo file <code>.env.local</code> với VITE_SUPABASE_URL và VITE_SUPABASE_ANON. Xem hướng dẫn SETUP_SUPABASE.md.
-          </div>
-        )}
-        <div className="flex flex-col gap-3">
-          <input type="email" placeholder="Email" value={email} onChange={e=>setEmail(e.target.value)}
-            className="w-full bg-zinc-50 border-2 border-zinc-100 rounded-2xl px-4 py-3 font-semibold outline-none focus:border-black"/>
-          <input type="password" placeholder="Mật khẩu (tối thiểu 6 ký tự)" value={password} onChange={e=>setPassword(e.target.value)}
-            onKeyDown={e=>e.key==='Enter'&&submit()}
-            className="w-full bg-zinc-50 border-2 border-zinc-100 rounded-2xl px-4 py-3 font-semibold outline-none focus:border-black"/>
-          {error&&<p className="text-xs text-red-500 font-semibold px-1">{error}</p>}
-        </div>
-        <button onClick={submit} disabled={loading}
-          className="mt-5 w-full bg-black text-white py-3.5 rounded-2xl font-bold hover:bg-zinc-800 transition-colors disabled:opacity-60">
-          {loading?'Đang xử lý...':(tab==='login'?'Đăng nhập & Đồng bộ':'Tạo tài khoản')}
-        </button>
-        <p className="text-center text-[11px] text-zinc-400 mt-4">
-          Dữ liệu lưu trên Supabase cloud.<br/>Đồng bộ được từ bất kỳ thiết bị, mạng nào.
-        </p>
-      </motion.div>
-    </div>
+      </nav>
+    </>
   );
 }
 
@@ -969,21 +1086,41 @@ function HabitItem({habit,onToggle,onDelete,onRename}:{habit:Habit;onToggle:(id:
   const [editing,setEditing]=useState(false);
   const [name,setName]=useState(habit.name);
   const commit=()=>{if(name.trim())onRename(habit.id,name.trim());setEditing(false);};
+  const thisWeekPct=Math.round((habit.streak/7)*100);
   return (
     <div className="bg-white p-4 rounded-[2rem] shadow-sm flex flex-col gap-3 group">
-      <div className="flex justify-between items-center">
-        <div className="flex-1">
-          {editing?<input autoFocus value={name} onChange={e=>setName(e.target.value)} onKeyDown={e=>{if(e.key==='Enter')commit();if(e.key==='Escape')setEditing(false);}} className="font-bold text-sm bg-zinc-50 border border-zinc-200 rounded-xl px-2 py-1 outline-none focus:border-black w-full"/>:<h3 className="font-bold text-sm">{habit.name}</h3>}
-          <p className="text-[10px] font-bold text-zinc-400 mt-0.5">{habit.streak} ngày liên tiếp 🔥</p>
+      <div className="flex justify-between items-start">
+        <div className="flex-1 min-w-0 pr-2">
+          {editing
+            ?<input autoFocus value={name} onChange={e=>setName(e.target.value)} onKeyDown={e=>{if(e.key==='Enter')commit();if(e.key==='Escape')setEditing(false);}} className="font-bold text-sm bg-zinc-50 border border-zinc-200 rounded-xl px-2 py-1 outline-none focus:border-black w-full"/>
+            :<h3 className="font-bold text-sm truncate">{habit.name}</h3>
+          }
+          <div className="flex items-center gap-2 mt-0.5">
+            <span className="text-[10px] font-bold text-zinc-400">{habit.streak}/7 ngày tuần này</span>
+            {habit.weeklyStreak>0&&<span className="text-[10px] font-bold text-orange-500">🔥 {habit.weeklyStreak} tuần</span>}
+          </div>
         </div>
-        <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-all">
-          {editing?<button onClick={commit} className="w-7 h-7 bg-emerald-100 rounded-full flex items-center justify-center hover:bg-emerald-200"><Check className="w-3.5 h-3.5 text-emerald-600"/></button>:<button onClick={()=>setEditing(true)} className="w-7 h-7 bg-blue-100 rounded-full flex items-center justify-center hover:bg-blue-200"><Pencil className="w-3.5 h-3.5 text-blue-500"/></button>}
-          <button onClick={()=>onDelete(habit.id)} className="w-7 h-7 bg-red-100 rounded-full flex items-center justify-center hover:bg-red-200"><Trash2 className="w-3.5 h-3.5 text-red-500"/></button>
+        <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-all shrink-0">
+          {editing
+            ?<button onClick={commit} className="w-7 h-7 bg-emerald-100 rounded-full flex items-center justify-center"><Check className="w-3.5 h-3.5 text-emerald-600"/></button>
+            :<button onClick={()=>setEditing(true)} className="w-7 h-7 bg-blue-100 rounded-full flex items-center justify-center"><Pencil className="w-3.5 h-3.5 text-blue-500"/></button>
+          }
+          <button onClick={()=>onDelete(habit.id)} className="w-7 h-7 bg-red-100 rounded-full flex items-center justify-center"><Trash2 className="w-3.5 h-3.5 text-red-500"/></button>
         </div>
       </div>
+      {/* Progress bar */}
+      <div className="h-1.5 bg-zinc-100 rounded-full overflow-hidden">
+        <div className="h-full rounded-full transition-all duration-500" style={{width:`${thisWeekPct}%`,backgroundColor:'var(--ac)'}}/>
+      </div>
+      {/* Day buttons */}
       <div className="flex gap-1">
         {DAY_SHORT.map((d,i)=>(
-          <button key={i} onClick={()=>onToggle(habit.id,i)} className={cn('flex-1 h-9 rounded-xl flex items-center justify-center text-[9px] font-bold transition-all hover:scale-105 active:scale-95',habit.completed[i]?'text-white':'bg-zinc-100 text-zinc-400 hover:bg-zinc-200')} style={habit.completed[i]?{backgroundColor:'var(--ac)'}:{}}>{d}</button>
+          <button key={i} onClick={()=>onToggle(habit.id,i)}
+            className={cn('flex-1 h-9 rounded-xl flex items-center justify-center text-[9px] font-bold transition-all hover:scale-105 active:scale-95',
+              habit.completed[i]?'text-white':'bg-zinc-100 text-zinc-400 hover:bg-zinc-200')}
+            style={habit.completed[i]?{backgroundColor:'var(--ac)'}:{}}>
+            {d}
+          </button>
         ))}
       </div>
     </div>
@@ -1001,12 +1138,38 @@ function HabitCol({title,habits,color,onToggle,onAdd,onDelete,onRename}:{title:s
   );
 }
 function HabitTrackerPage({habits,setHabits}:{habits:Habit[];setHabits:(h:Habit[])=>void}) {
-  const toggle=(id:string,day:number)=>setHabits(habits.map(h=>{if(h.id!==id)return h;const c=[...h.completed];c[day]=!c[day];return{...h,completed:c,streak:c.filter(Boolean).length};}));
+  // Auto-reset completed[] when a new ISO week starts — streak/weeklyStreak preserved
+  useEffect(()=>{
+    const thisWeek=getISOWeek();
+    const needsReset=habits.some(h=>h.lastResetWeek!==thisWeek);
+    if(!needsReset)return;
+    setHabits(habits.map(h=>{
+      if(h.lastResetWeek===thisWeek)return h;
+      const hadAnyDone=h.completed.some(Boolean);
+      return{
+        ...h,
+        completed:Array(7).fill(false),
+        streak:0,
+        weeklyStreak:hadAnyDone?h.weeklyStreak+1:0,
+        lastResetWeek:thisWeek,
+      };
+    }));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[]);
+
+  const toggle=(id:string,day:number)=>setHabits(habits.map(h=>{
+    if(h.id!==id)return h;
+    const c=[...h.completed];c[day]=!c[day];
+    return{...h,completed:c,streak:c.filter(Boolean).length};
+  }));
   const del=(id:string)=>setHabits(habits.filter(h=>h.id!==id));
   const rename=(id:string,name:string)=>setHabits(habits.map(h=>h.id===id?{...h,name}:h));
-  const add=(group:'study'|'life')=>(name:string)=>setHabits([...habits,{id:Date.now().toString(),name,streak:0,completed:Array(7).fill(false),group}]);
+  const add=(group:'study'|'life')=>(name:string)=>setHabits([...habits,{
+    id:Date.now().toString(),name,streak:0,weeklyStreak:0,
+    completed:Array(7).fill(false),group,lastResetWeek:getISOWeek(),
+  }]);
   return (
-    <div className="p-6 md:p-8 min-h-screen flex flex-col md:flex-row gap-5 overflow-y-auto no-scrollbar pb-24 md:pb-10">
+    <div className="p-4 md:p-8 min-h-screen flex flex-col md:flex-row gap-4 md:gap-5 overflow-y-auto no-scrollbar pb-28 md:pb-10">
       <HabitCol title="Study Habits" habits={habits.filter(h=>h.group==='study')} color="bg-card-blue" onToggle={toggle} onAdd={add('study')} onDelete={del} onRename={rename}/>
       <HabitCol title="Life Habits"  habits={habits.filter(h=>h.group==='life')}  color="bg-card-green" onToggle={toggle} onAdd={add('life')}  onDelete={del} onRename={rename}/>
     </div>
@@ -1918,7 +2081,6 @@ export default function App() {
   const [archived,setArchived]   =useServerState<Task[]>([]);
   const [schedule,setSchedule]   =useServerState<ScheduleEvent[]>(INIT_SCHEDULE);
   const [notes,setNotes]         =useServerState<Note[]>(INIT_NOTES);
-  const [showAuth,setShowAuth]   =useState(false);
   const {toasts,add:addToast}    =useToast();
 
   // ── Auto-archive completed tasks + purge >30 days ──────────────────────────
@@ -1985,48 +2147,67 @@ export default function App() {
     addToast('Đã reset toàn bộ dữ liệu','🔄');
   },[setTasks,setHabits,setFinanceRaw,setSettings,setArchived,setSchedule,setNotes,addToast]);
 
+  const PAGE_LABELS: Record<string,string>={home:'Home',pomodoro:'Pomodoro',tasks:'Tasks',kanban:'Kanban',habits:'Habits',schedule:'Schedule',notes:'Notes',finance:'Finance',stats:'Stats'};
+  const openAuth=()=>setActivePage('auth');
   const handleLogin=(u:AuthUser)=>{
     setUser(u);
+    setActivePage('home');
     addToast(`Xin chào, ${u.email}!`,'👋');
-    // pull() triggered automatically by useSupabaseSync when user changes
   };
   const handleLogout=()=>{
     setUser(null);
-    // Reset to defaults on logout so stale data isn't shown
     setTasks(INIT_TASKS);setHabits(INIT_HABITS);setFinanceRaw(INIT_FINANCE);
     setSettings(INIT_SETTINGS);setArchived([]);setSchedule(INIT_SCHEDULE);setNotes(INIT_NOTES);
     addToast('Đã đăng xuất','👋');
   };
 
+  // Auth page — full screen, no sidebar/nav
+  if(activePage==='auth'){
+    return(
+      <div className="font-sans" style={{minHeight:'100dvh'}}>
+        <AuthPage onLogin={handleLogin} onBack={()=>setActivePage('home')}/>
+      </div>
+    );
+  }
+
   return (
     <div className="flex min-h-screen font-sans bg-bg-chance selection:bg-black selection:text-white">
-      {/* No-account banner */}
-      {!user&&SB_URL&&(
-        <div className="fixed top-0 left-0 right-0 z-[400] bg-amber-500 text-white text-xs font-bold flex items-center justify-between px-4 py-2">
-          <span>⚠️ Chưa đăng nhập — dữ liệu sẽ mất khi tải lại trang</span>
-          <button onClick={()=>setShowAuth(true)} className="bg-white text-amber-600 px-3 py-1 rounded-xl font-bold hover:bg-amber-50">Đăng nhập ngay</button>
-        </div>
-      )}
+      {/* Desktop sidebar */}
       <Sidebar activePage={activePage} setActivePage={setActivePage} settings={settings} setSettings={setSettings}
-        user={user} onLogout={handleLogout} onSyncClick={()=>user?pull():setShowAuth(true)} syncing={syncing}/>
-      <main className={cn('flex-1 relative overflow-hidden',!user&&SB_URL?'pt-9':'')}>
-        <AnimatePresence mode="wait">
-          <motion.div key={activePage} initial={{opacity:0,x:12}} animate={{opacity:1,x:0}} exit={{opacity:0,x:-12}} transition={{duration:0.2,ease:'easeInOut'}} className="min-h-screen">
-            {activePage==='home'     &&<ErrorBoundary><HomePage tasks={tasks} habits={habits} setHabits={setHabits} finance={finance} setActivePage={setActivePage}/></ErrorBoundary>}
-            {activePage==='pomodoro' &&<ErrorBoundary><PomodoroPage settings={settings} setSettings={setSettings}/></ErrorBoundary>}
-            {activePage==='tasks'    &&<ErrorBoundary><TaskListPage tasks={tasks} setTasks={setTasks} categories={allCategories} onTaskDone={handleTaskDone} onTaskUndo={handleTaskUndo}/></ErrorBoundary>}
-            {activePage==='kanban'   &&<ErrorBoundary><KanbanPage tasks={tasks} setTasks={setTasks} archived={archived} setArchived={setArchived}/></ErrorBoundary>}
-            {activePage==='habits'   &&<ErrorBoundary><HabitTrackerPage habits={habits} setHabits={setHabits}/></ErrorBoundary>}
-            {activePage==='schedule' &&<ErrorBoundary><SchedulePage events={schedule} setEvents={setSchedule}/></ErrorBoundary>}
-            {activePage==='notes'    &&<ErrorBoundary><NotesPage notes={notes} setNotes={setNotes}/></ErrorBoundary>}
-            {activePage==='finance'  &&<ErrorBoundary><FinancePage finance={finance} setFinance={setFinance}/></ErrorBoundary>}
-            {activePage==='stats'    &&<ErrorBoundary><StatisticsPage tasks={tasks} habits={habits} finance={finance} onReset={handleReset}/></ErrorBoundary>}
-          </motion.div>
-        </AnimatePresence>
-      </main>
-      <BottomNav activePage={activePage} setActivePage={setActivePage} user={user} onSyncClick={()=>user?pull():setShowAuth(true)}/>
+        user={user} onLogout={handleLogout} onSyncClick={()=>user?pull():openAuth()} syncing={syncing}/>
+
+      <div className="flex-1 flex flex-col overflow-hidden">
+        {/* Mobile header */}
+        <MobileHeader title={PAGE_LABELS[activePage]??''} activePage={activePage} setActivePage={setActivePage}
+          user={user} onSyncClick={()=>user?pull():openAuth()} syncing={syncing}/>
+
+        {/* No-account banner — desktop only (mobile uses header icon) */}
+        {!user&&SB_URL&&(
+          <div className="hidden md:flex items-center justify-between bg-amber-500 text-white text-xs font-bold px-4 py-2 shrink-0">
+            <span>⚠️ Chưa đăng nhập — dữ liệu sẽ mất khi tải lại trang</span>
+            <button onClick={openAuth} className="bg-white text-amber-600 px-3 py-1 rounded-xl font-bold hover:bg-amber-50">Đăng nhập ngay</button>
+          </div>
+        )}
+
+        <main className="flex-1 overflow-hidden">
+          <AnimatePresence mode="wait">
+            <motion.div key={activePage} initial={{opacity:0,x:12}} animate={{opacity:1,x:0}} exit={{opacity:0,x:-12}} transition={{duration:0.2,ease:'easeInOut'}} className="min-h-full">
+              {activePage==='home'     &&<ErrorBoundary><HomePage tasks={tasks} habits={habits} setHabits={setHabits} finance={finance} setActivePage={setActivePage}/></ErrorBoundary>}
+              {activePage==='pomodoro' &&<ErrorBoundary><PomodoroPage settings={settings} setSettings={setSettings}/></ErrorBoundary>}
+              {activePage==='tasks'    &&<ErrorBoundary><TaskListPage tasks={tasks} setTasks={setTasks} categories={allCategories} onTaskDone={handleTaskDone} onTaskUndo={handleTaskUndo}/></ErrorBoundary>}
+              {activePage==='kanban'   &&<ErrorBoundary><KanbanPage tasks={tasks} setTasks={setTasks} archived={archived} setArchived={setArchived}/></ErrorBoundary>}
+              {activePage==='habits'   &&<ErrorBoundary><HabitTrackerPage habits={habits} setHabits={setHabits}/></ErrorBoundary>}
+              {activePage==='schedule' &&<ErrorBoundary><SchedulePage events={schedule} setEvents={setSchedule}/></ErrorBoundary>}
+              {activePage==='notes'    &&<ErrorBoundary><NotesPage notes={notes} setNotes={setNotes}/></ErrorBoundary>}
+              {activePage==='finance'  &&<ErrorBoundary><FinancePage finance={finance} setFinance={setFinance}/></ErrorBoundary>}
+              {activePage==='stats'    &&<ErrorBoundary><StatisticsPage tasks={tasks} habits={habits} finance={finance} onReset={handleReset}/></ErrorBoundary>}
+            </motion.div>
+          </AnimatePresence>
+        </main>
+      </div>
+
+      <BottomNav activePage={activePage} setActivePage={setActivePage} user={user} onSyncClick={()=>user?pull():openAuth()} syncing={syncing}/>
       <ToastContainer toasts={toasts}/>
-      <AnimatePresence>{showAuth&&<AuthModal onClose={()=>setShowAuth(false)} onLogin={handleLogin}/>}</AnimatePresence>
     </div>
   );
 }
