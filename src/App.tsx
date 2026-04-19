@@ -115,7 +115,7 @@ async function sbSetData(token: string, uid: string, data: object) {
 // ─── Types ────────────────────────────────────────────────────────────────────
 type Priority = 'high'|'medium'|'low';
 type Status   = 'todo'|'in-progress'|'done';
-interface Task { id:string;title:string;status:Status;priority:Priority;category:string;deadline:string;createdAt:string;tags:string[];doneAt?:string;archivedAt?:string; }
+interface Task { id:string;title:string;status:Status;priority:Priority;category:string;deadline:string;createdAt:string;tags:string[];archivedAt?:string; }
 interface Habit{ id:string;name:string;streak:number;weeklyStreak:number;completed:boolean[];group:'study'|'life';lastResetWeek:string; }
 interface Transaction{ id:string;type:'income'|'expense'|'reward';amount:number;note:string;date:string;taskTitle?:string; }
 interface FinanceState{ rewardPerTask:number;transactions:Transaction[]; }
@@ -964,7 +964,6 @@ const KCOLS:[{id:Status;title:string;color:string}]=([
 
 function KanbanPage({tasks,setTasks,archived,setArchived}:{tasks:Task[];setTasks:(t:Task[])=>void;archived:Task[];setArchived:(t:Task[])=>void}) {
   const dragId=useRef<string|null>(null);
-  const dragFrom=useRef<'board'|'archive'>('board');
   const today=new Date();
   const [cm,setCm]=useState({year:today.getFullYear(),month:today.getMonth()});
   const [selDay,setSelDay]=useState<number|null>(null);
@@ -974,25 +973,8 @@ function KanbanPage({tasks,setTasks,archived,setArchived}:{tasks:Task[];setTasks
   const startOffset=(new Date(cm.year,cm.month,1).getDay()+6)%7;
   const deadlines=new Map<number,Task[]>();
   tasks.forEach(t=>{const d=new Date(t.deadline);if(d.getFullYear()===cm.year&&d.getMonth()===cm.month)deadlines.set(d.getDate(),[...(deadlines.get(d.getDate())??[]),t]);});
-
-  const move=(id:string,s:Status)=>setTasks(tasks.map(t=>t.id===id?{...t,status:s,doneAt:s==='done'?(t.doneAt??todayStr()):undefined}:t));
-
-  // Restore a task from archive back to active board
-  const restoreFromArchive=(task:Task,targetStatus:Status='todo')=>{
-    setArchived(prev=>prev.filter(t=>t.id!==task.id));
-    setTasks(prev=>[{...task,status:targetStatus,doneAt:undefined,archivedAt:undefined},...prev.filter(t=>t.id!==task.id)]);
-  };
-
+  const move=(id:string,s:Status)=>setTasks(tasks.map(t=>t.id===id?{...t,status:s}:t));
   const selTasks=selDay?(deadlines.get(selDay)??[]):[];
-
-  // Days until auto-archive for a done task (5 days from doneAt)
-  const daysUntilArchive=(task:Task):number=>{
-    if(!task.doneAt) return 5;
-    const doneDate=new Date(task.doneAt).getTime();
-    const archiveDate=doneDate+5*24*60*60*1000;
-    return Math.max(0,Math.ceil((archiveDate-Date.now())/86400000));
-  };
-
   return (
     <div className="p-6 md:p-8 min-h-screen overflow-y-auto no-scrollbar flex flex-col gap-7 pb-24 md:pb-10">
       <div className="flex justify-between items-center">
@@ -1001,54 +983,29 @@ function KanbanPage({tasks,setTasks,archived,setArchived}:{tasks:Task[];setTasks
           <Archive className="w-3.5 h-3.5"/> Lưu trữ ({archived.length})
         </button>
       </div>
-
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         {KCOLS.map((col:any)=>(
           <div key={col.id} className={cn('p-5 rounded-[2rem] flex flex-col gap-3 min-h-[180px]',col.color)}
-            onDragOver={e=>e.preventDefault()}
-            onDrop={()=>{
-              if(dragFrom.current==='archive'){
-                // Restore from archive to this column
-                const task=archived.find(t=>t.id===dragId.current);
-                if(task) restoreFromArchive(task,col.id);
-              } else {
-                if(dragId.current) move(dragId.current,col.id);
-              }
-              dragId.current=null;
-            }}>
+            onDragOver={e=>e.preventDefault()} onDrop={()=>{if(dragId.current)move(dragId.current,col.id);dragId.current=null;}}>
             <div className="flex justify-between items-center">
               <h3 className="font-bold">{col.title}</h3>
               <span className="bg-white/70 px-2.5 py-0.5 rounded-lg text-xs font-bold">{tasks.filter(t=>t.status===col.id).length}</span>
             </div>
-            {col.id==='done'&&tasks.filter(t=>t.status==='done').length>0&&(
-              <p className="text-[10px] text-emerald-600 font-semibold -mt-1">🕐 Tự chuyển lưu trữ sau 5 ngày hoàn thành</p>
-            )}
-            {tasks.filter(t=>t.status===col.id).map(task=>{
-              const daysLeft=col.id==='done'?daysUntilArchive(task):null;
-              return (
-                <div key={task.id} draggable onDragStart={()=>{dragId.current=task.id;dragFrom.current='board';}}
-                  className="bg-white p-3.5 rounded-2xl shadow-sm border border-zinc-100 cursor-grab active:cursor-grabbing hover:shadow-md transition-all select-none">
-                  <div className="flex justify-between items-start mb-2">
-                    <span className={cn('text-[9px] font-bold px-2 py-0.5 rounded-md uppercase',task.priority==='high'?'bg-red-100 text-red-600':task.priority==='medium'?'bg-yellow-100 text-yellow-700':'bg-zinc-100 text-zinc-600')}>{task.priority}</span>
-                    <GripVertical className="w-4 h-4 text-zinc-300"/>
-                  </div>
-                  <p className="text-sm font-bold leading-snug mb-2">{task.title}</p>
-                  {(task.tags??[]).length>0&&<div className="flex gap-1 flex-wrap mb-2">{(task.tags??[]).map(tag=><span key={tag} className="bg-zinc-100 text-zinc-500 px-1.5 py-0.5 rounded text-[9px] font-bold">{tag}</span>)}</div>}
-                  <div className="flex items-center justify-between gap-1">
-                    <div className="flex items-center gap-1 text-[9px] font-bold text-zinc-400"><Clock className="w-3 h-3"/>{task.deadline}</div>
-                    {daysLeft!==null&&(
-                      <span className={cn('text-[9px] font-bold px-1.5 py-0.5 rounded-lg',daysLeft===0?'bg-orange-100 text-orange-600':'bg-emerald-50 text-emerald-600')}>
-                        {daysLeft===0?'Lưu trữ hôm nay':`Lưu trữ sau ${daysLeft}n`}
-                      </span>
-                    )}
-                  </div>
+            {tasks.filter(t=>t.status===col.id).map(task=>(
+              <div key={task.id} draggable onDragStart={()=>{dragId.current=task.id;}}
+                className="bg-white p-3.5 rounded-2xl shadow-sm border border-zinc-100 cursor-grab active:cursor-grabbing hover:shadow-md transition-all select-none">
+                <div className="flex justify-between items-start mb-2">
+                  <span className={cn('text-[9px] font-bold px-2 py-0.5 rounded-md uppercase',task.priority==='high'?'bg-red-100 text-red-600':task.priority==='medium'?'bg-yellow-100 text-yellow-700':'bg-zinc-100 text-zinc-600')}>{task.priority}</span>
+                  <GripVertical className="w-4 h-4 text-zinc-300"/>
                 </div>
-              );
-            })}
+                <p className="text-sm font-bold leading-snug mb-2">{task.title}</p>
+                {(task.tags??[]).length>0&&<div className="flex gap-1 flex-wrap mb-2">{(task.tags??[]).map(tag=><span key={tag} className="bg-zinc-100 text-zinc-500 px-1.5 py-0.5 rounded text-[9px] font-bold">{tag}</span>)}</div>}
+                <div className="flex items-center gap-1 text-[9px] font-bold text-zinc-400"><Clock className="w-3 h-3"/>{task.deadline}</div>
+              </div>
+            ))}
           </div>
         ))}
       </div>
-
       <section className="bg-white rounded-[2rem] p-6 shadow-sm border border-zinc-100">
         <div className="flex justify-between items-center mb-5">
           <h2 className="text-xl font-bold">{MONTHS[cm.month]} {cm.year}</h2>
@@ -1093,82 +1050,29 @@ function KanbanPage({tasks,setTasks,archived,setArchived}:{tasks:Task[];setTasks
           )}
         </AnimatePresence>
       </section>
-
-      {/* Archive modal */}
       <AnimatePresence>
         {showArch&&(
           <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-[100] p-4">
-            <motion.div initial={{opacity:0,scale:0.95}} animate={{opacity:1,scale:1}} exit={{opacity:0,scale:0.95}} className="bg-white rounded-[2rem] p-7 w-full max-w-lg shadow-2xl max-h-[85vh] flex flex-col">
-              <div className="flex justify-between items-center mb-2 shrink-0">
-                <div>
-                  <h2 className="text-xl font-bold flex items-center gap-2"><Archive className="w-5 h-5"/> Lưu trữ</h2>
-                  <p className="text-xs text-zinc-400 mt-0.5">{archived.length} tasks · Kéo thả hoặc nhấn ↩ để khôi phục</p>
-                </div>
+            <motion.div initial={{opacity:0,scale:0.95}} animate={{opacity:1,scale:1}} exit={{opacity:0,scale:0.95}} className="bg-white rounded-[2rem] p-7 w-full max-w-lg shadow-2xl max-h-[80vh] flex flex-col">
+              <div className="flex justify-between items-center mb-5 shrink-0">
+                <div><h2 className="text-xl font-bold flex items-center gap-2"><Archive className="w-5 h-5"/> Lưu trữ</h2><p className="text-xs text-zinc-400 mt-0.5">{archived.length} tasks</p></div>
                 <button onClick={()=>setShowArch(false)} className="w-8 h-8 rounded-full bg-zinc-100 flex items-center justify-center"><X className="w-4 h-4"/></button>
               </div>
-
-              {/* Drop zones for restoring */}
-              <div className="grid grid-cols-3 gap-2 mb-4 shrink-0">
-                {KCOLS.map((col:any)=>(
-                  <div key={col.id}
-                    onDragOver={e=>e.preventDefault()}
-                    onDrop={()=>{
-                      if(dragFrom.current==='archive'&&dragId.current){
-                        const task=archived.find(t=>t.id===dragId.current);
-                        if(task){restoreFromArchive(task,col.id);setShowArch(false);}
-                        dragId.current=null;
-                      }
-                    }}
-                    className={cn('border-2 border-dashed rounded-2xl p-3 text-center text-xs font-bold transition-colors',
-                      col.id==='todo'?'border-zinc-300 text-zinc-400 bg-zinc-50':col.id==='in-progress'?'border-blue-200 text-blue-400 bg-blue-50':'border-emerald-200 text-emerald-500 bg-emerald-50')}>
-                    <div className="text-base mb-0.5">{col.id==='todo'?'📋':col.id==='in-progress'?'⚡':'✅'}</div>
-                    {col.title}
-                  </div>
-                ))}
-              </div>
-
-              <div className="overflow-y-auto flex flex-col gap-2 no-scrollbar flex-1">
-                {archived.length===0?(
-                  <div className="text-center text-zinc-300 py-12">
-                    <Archive className="w-12 h-12 mx-auto mb-3 opacity-30"/>
-                    <p className="font-bold">Chưa có task nào được lưu trữ</p>
-                  </div>
-                ):archived.map(t=>{
-                  const daysLeft=t.archivedAt?30-Math.floor((Date.now()-new Date(t.archivedAt).getTime())/86400000):30;
-                  const urgent=daysLeft<=7;
-                  return (
-                    <div key={t.id}
-                      draggable
-                      onDragStart={()=>{dragId.current=t.id;dragFrom.current='archive';}}
-                      className="flex items-center gap-3 p-3.5 bg-zinc-50 rounded-2xl group hover:bg-zinc-100 transition-colors cursor-grab active:cursor-grabbing border border-zinc-100">
-                      <GripVertical className="w-4 h-4 text-zinc-300 shrink-0"/>
-                      <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0"/>
-                      <div className="flex-1 min-w-0">
-                        <p className="font-bold text-sm truncate text-zinc-600">{t.title}</p>
-                        <div className="flex items-center gap-2 mt-0.5">
-                          <span className="text-[10px] text-zinc-400">{t.category}</span>
-                          <span className={cn('text-[10px] font-bold',urgent?'text-orange-500':'text-zinc-400')}>
-                            {daysLeft<=0?'Xóa hôm nay':urgent?`Xóa sau ${daysLeft} ngày`:`Còn ${daysLeft} ngày`}
-                          </span>
-                        </div>
-                        {t.archivedAt&&<p className="text-[10px] text-zinc-300 mt-0.5">Lưu trữ: {t.archivedAt}</p>}
-                      </div>
-                      {/* Restore button */}
-                      <button
-                        onClick={()=>restoreFromArchive(t,'todo')}
-                        title="Khôi phục về To Do"
-                        className="w-8 h-8 bg-white rounded-xl flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all hover:bg-emerald-50 border border-zinc-100 shrink-0">
-                        <RotateCcw className="w-3.5 h-3.5 text-emerald-500"/>
-                      </button>
+              <div className="overflow-y-auto flex flex-col gap-2 no-scrollbar">
+                {archived.length===0?<p className="text-center text-zinc-400 py-8">Chưa có task nào.</p>:archived.map(t=>{
+                const daysLeft=t.archivedAt?30-Math.floor((Date.now()-new Date(t.archivedAt).getTime())/86400000):30;
+                return (
+                  <div key={t.id} className="flex items-center gap-3 p-3 bg-zinc-50 rounded-2xl group">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0"/>
+                    <div className="flex-1 min-w-0">
+                      <p className="font-bold text-sm truncate line-through text-zinc-400">{t.title}</p>
+                      <p className="text-[10px] text-zinc-400">{t.category} · Xóa sau {Math.max(0,daysLeft)} ngày</p>
                     </div>
-                  );
-                })}
+                  </div>
+                );
+              })}
               </div>
-              {archived.length>0&&(
-                <button onClick={()=>{setArchived([]);}} className="mt-4 w-full py-3 bg-red-50 text-red-500 rounded-2xl text-sm font-bold hover:bg-red-100 shrink-0 transition-colors">
-                  Xóa toàn bộ lưu trữ
-                </button>
-              )}
+              {archived.length>0&&<button onClick={()=>{setArchived([]);setShowArch(false);}} className="mt-4 w-full py-3 bg-red-50 text-red-500 rounded-2xl text-sm font-bold hover:bg-red-100 shrink-0">Xóa toàn bộ lưu trữ</button>}
             </motion.div>
           </div>
         )}
@@ -2166,52 +2070,39 @@ function useSupabaseSync(
 export default function App() {
   const [activePage,setActivePage]=useState('home');
 
-  // Auth token: kept in localStorage so user stays logged in across browser sessions
+  // Auth token — localStorage so user stays logged in
   const [user,setUser]=useLocalStorage<AuthUser|null>('chance-user',null);
 
-  // All app data lives in memory — Supabase is the single source of truth
-  const [tasks,setTasks]         =useServerState<Task[]>(INIT_TASKS);
-  const [habits,setHabits]       =useServerState<Habit[]>(INIT_HABITS);
-  const [finance,setFinanceRaw]  =useServerState<FinanceState>(INIT_FINANCE);
-  const [settings,setSettings]   =useServerState<AppSettings>(INIT_SETTINGS);
-  const [archived,setArchived]   =useServerState<Task[]>([]);
-  const [schedule,setSchedule]   =useServerState<ScheduleEvent[]>(INIT_SCHEDULE);
-  const [notes,setNotes]         =useServerState<Note[]>(INIT_NOTES);
+  // All data uses localStorage as offline cache AND Supabase as cloud backup
+  // This means data survives page refreshes even without internet / Supabase
+  const [tasks,setTasks]         =useLocalStorage<Task[]>('chance-tasks',INIT_TASKS);
+  const [habits,setHabits]       =useLocalStorage<Habit[]>('chance-habits',INIT_HABITS);
+  const [finance,setFinanceRaw]  =useLocalStorage<FinanceState>('chance-finance',INIT_FINANCE);
+  const [settings,setSettings]   =useLocalStorage<AppSettings>('chance-settings',INIT_SETTINGS);
+  const [archived,setArchived]   =useLocalStorage<Task[]>('chance-archived',[]);
+  const [schedule,setSchedule]   =useLocalStorage<ScheduleEvent[]>('chance-schedule',INIT_SCHEDULE);
+  const [notes,setNotes]         =useLocalStorage<Note[]>('chance-notes',INIT_NOTES);
   const {toasts,add:addToast}    =useToast();
 
-  // ── Stamp doneAt when task is first marked done ──────────────────────────────
+  // ── Auto-archive completed tasks + purge >30 days ──────────────────────────
+  // Skip on first mount — only fire when a new task is marked done by the user
+  const mountedRef=useRef(false);
+  const doneTasks=tasks.filter(t=>t.status==='done');
+  const doneCount=doneTasks.length;
   useEffect(()=>{
-    const now=todayStr();
-    const needsStamp=tasks.filter(t=>t.status==='done'&&!t.doneAt);
-    if(needsStamp.length===0) return;
-    setTasks(prev=>prev.map(t=>t.status==='done'&&!t.doneAt?{...t,doneAt:now}:t));
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[tasks.filter(t=>t.status==='done'&&!t.doneAt).length]);
-
-  // ── Auto-archive done tasks after 5 days, purge archived after 30 days ───────
-  useEffect(()=>{
-    const fiveDaysAgo=new Date(Date.now()-5*24*60*60*1000).toISOString().split('T')[0];
+    if(!mountedRef.current){mountedRef.current=true;return;}  // skip first render
+    if(doneCount===0)return;
     const thirtyDaysAgo=new Date(Date.now()-30*24*60*60*1000).toISOString().split('T')[0];
-    const readyToArchive=tasks.filter(t=>t.status==='done'&&t.doneAt&&t.doneAt<=fiveDaysAgo);
-    if(readyToArchive.length>0){
-      const archiveTime=todayStr();
-      setTasks(prev=>prev.filter(t=>!readyToArchive.find(r=>r.id===t.id)));
-      setArchived(prev=>{
-        const existingIds=new Set(prev.map(a=>a.id));
-        const newOnes=readyToArchive.filter(t=>!existingIds.has(t.id)).map(t=>({...t,archivedAt:t.archivedAt??archiveTime}));
-        const purged=prev.filter(t=>(t.archivedAt??'9999')>thirtyDaysAgo);
-        return [...newOnes,...purged];
-      });
-    } else {
-      // Still purge stale archived even if nothing new to archive
-      setArchived(prev=>{
-        const purged=prev.filter(t=>(t.archivedAt??'9999')>thirtyDaysAgo);
-        return purged.length===prev.length?prev:purged;
-      });
-    }
-  // Run once on mount and whenever done tasks change
+    const toArchive=doneTasks.map(t=>({...t,archivedAt:t.archivedAt??todayStr()}));
+    setTasks(prev=>prev.filter(t=>t.status!=='done'));
+    setArchived(prev=>{
+      const existingIds=new Set(prev.map(a=>a.id));
+      const newOnes=toArchive.filter(t=>!existingIds.has(t.id));
+      const purged=prev.filter(t=>(t.archivedAt??'9999')>=thirtyDaysAgo);
+      return [...newOnes,...purged];
+    });
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[tasks.filter(t=>t.status==='done').map(t=>t.doneAt).join(',')]);
+  },[doneCount]);
 
   useAccentCSS(settings.accentColor);
 
@@ -2219,11 +2110,23 @@ export default function App() {
   const syncPayload=useMemo(()=>({tasks,habits,finance,settings,archived,schedule,notes}),[tasks,habits,finance,settings,archived,schedule,notes]);
 
   const applyServerData=useCallback((d:any)=>{
-    if(d.tasks)    setTasks(d.tasks);
+    if(d.tasks){
+      // Tasks that are 'done' go to archived immediately (don't trigger auto-archive effect)
+      const active=(d.tasks as Task[]).filter(t=>t.status!=='done');
+      const done=(d.tasks as Task[]).filter(t=>t.status==='done').map(t=>({...t,archivedAt:t.archivedAt??todayStr()}));
+      setTasks(active);
+      if(done.length>0)setArchived(prev=>{
+        const ids=new Set(prev.map(a=>a.id));
+        return[...done.filter(t=>!ids.has(t.id)),...prev];
+      });
+    }
     if(d.habits)   setHabits(d.habits);
     if(d.finance)  setFinanceRaw(d.finance);
     if(d.settings) setSettings(d.settings);
-    if(d.archived) setArchived(d.archived);
+    if(d.archived) setArchived(prev=>{
+      const ids=new Set(prev.map(a=>a.id));
+      return[...(d.archived as Task[]).filter(t=>!ids.has(t.id)),...prev];
+    });
     if(d.schedule) setSchedule(d.schedule);
     if(d.notes)    setNotes(d.notes);
     addToast('Đồng bộ thành công!','☁️');
