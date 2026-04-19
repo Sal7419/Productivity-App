@@ -101,8 +101,9 @@ async function sbRefresh(refreshToken: string) {
   return sbFetch('/auth/v1/token?grant_type=refresh_token',{method:'POST',body:JSON.stringify({refresh_token:refreshToken})});
 }
 async function sbGetData(token: string, uid: string) {
-  const rows = await sbFetch(`/rest/v1/profiles?id=eq.${uid}&select=data`,{},token);
-  return (Array.isArray(rows)?rows[0]?.data:null)??null;
+  const rows = await sbFetch(`/rest/v1/profiles?id=eq.${uid}&select=data,updated_at`,{},token);
+  const row = Array.isArray(rows)?rows[0]:null;
+  return row ? { data: row.data, updatedAt: row.updated_at } : null;
 }
 async function sbSetData(token: string, uid: string, data: object) {
   await sbFetch('/rest/v1/profiles',{
@@ -2000,15 +2001,16 @@ function useSupabaseSync(
   data: object,
   setData: (d:any)=>void,
   setUser: (u:AuthUser|null)=>void,
+  localUpdatedAt: string,
+  setLocalUpdatedAt: (v:string)=>void,
 ) {
   const [syncing,setSyncing]=useState(false);
-  // `ready` = initial pull done; don't push until then to avoid overwriting server data
-  const ready=useRef(false);
+  const ready=useRef(false);       // true after first pull completes
+  const pushing=useRef(false);     // prevent concurrent pushes
   const debRef=useRef<ReturnType<typeof setTimeout>|null>(null);
   const dataRef=useRef(data);
   dataRef.current=data;
 
-  // Refresh token if expired (<5 min left)
   const getValidToken=useCallback(async():Promise<string|null>=>{
     if(!user)return null;
     const fiveMin=5*60*1000;
@@ -2023,11 +2025,12 @@ function useSupabaseSync(
   },[user,setUser]);
 
   const push=useCallback(async(payload:object)=>{
-    if(!user||!SB_URL||!ready.current)return;
+    if(!user||!SB_URL||!ready.current||pushing.current)return;
+    pushing.current=true;
     try{
       const token=await getValidToken();
       if(token) await sbSetData(token,user.userId,payload);
-    }catch{}
+    }catch{}finally{pushing.current=false;}
   },[user,getValidToken]);
 
   const pull=useCallback(async()=>{
@@ -2036,32 +2039,53 @@ function useSupabaseSync(
     try{
       const token=await getValidToken();
       if(!token)return;
-      const d=await sbGetData(token,user.userId);
-      if(d) setData(d);
-    }catch{}finally{
-      setSyncing(false);
-      ready.current=true; // allow push after first pull
-    }
-  },[user,setData,getValidToken]);
+      const result=await sbGetData(token,user.userId);
 
-  // Auto-pull on mount (or when user changes) — this is the KEY fix
-  useEffect(()=>{
-    ready.current=false; // reset on user change
-    if(user&&SB_URL){
-      pull();
-    } else {
-      ready.current=true; // no user → allow push immediately
+      if(!result||!result.data){
+        // Server has no data → push local data up so it's not lost
+        const now=new Date().toISOString();
+        await sbSetData(token,user.userId,{...dataRef.current,_localUpdatedAt:now});
+        setLocalUpdatedAt(now);
+      } else {
+        const serverTs=result.updatedAt??new Date(0).toISOString();
+        const localTs=localUpdatedAt??new Date(0).toISOString();
+
+        if(serverTs>localTs){
+          // Server is newer → apply server data
+          setData(result.data);
+          setLocalUpdatedAt(serverTs);
+        } else {
+          // Local is newer (or equal) → push local up to server
+          await sbSetData(token,user.userId,dataRef.current);
+        }
+      }
+    }catch(e){
+      console.error('[Sync] pull error',e);
+    }finally{
+      setSyncing(false);
+      ready.current=true;
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[user,setData,getValidToken,setLocalUpdatedAt]);
+
+  // Auto-pull when user changes
+  useEffect(()=>{
+    ready.current=false;
+    if(user&&SB_URL){pull();}
+    else{ready.current=true;}
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[user?.userId]);
 
-  // Debounced auto-push when data changes — only after pull is done
+  // Debounced push on data change — mark localUpdatedAt so we know local is now newest
   useEffect(()=>{
     if(!user||!SB_URL)return;
+    const now=new Date().toISOString();
+    setLocalUpdatedAt(now);
     if(debRef.current)clearTimeout(debRef.current);
     debRef.current=setTimeout(()=>{if(ready.current)push(dataRef.current);},2000);
     return()=>{if(debRef.current)clearTimeout(debRef.current);};
-  },[data,user,push]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[data,user]);
 
   return{syncing,pull};
 }
@@ -2082,6 +2106,8 @@ export default function App() {
   const [archived,setArchived]   =useLocalStorage<Task[]>('chance-archived',[]);
   const [schedule,setSchedule]   =useLocalStorage<ScheduleEvent[]>('chance-schedule',INIT_SCHEDULE);
   const [notes,setNotes]         =useLocalStorage<Note[]>('chance-notes',INIT_NOTES);
+  // Track when local data was last modified so we can compare with server
+  const [localUpdatedAt,setLocalUpdatedAt]=useLocalStorage<string>('chance-updated-at',new Date(0).toISOString());
   const {toasts,add:addToast}    =useToast();
 
   // ── Auto-archive completed tasks + purge >30 days ──────────────────────────
@@ -2107,11 +2133,10 @@ export default function App() {
   useAccentCSS(settings.accentColor);
 
   const allCategories=useMemo(()=>[...DEFAULT_CATEGORIES,...settings.customCategories.filter(c=>!DEFAULT_CATEGORIES.includes(c))],[settings.customCategories]);
-  const syncPayload=useMemo(()=>({tasks,habits,finance,settings,archived,schedule,notes}),[tasks,habits,finance,settings,archived,schedule,notes]);
+  const syncPayload=useMemo(()=>({tasks,habits,finance,settings,archived,schedule,notes,_localUpdatedAt:localUpdatedAt}),[tasks,habits,finance,settings,archived,schedule,notes,localUpdatedAt]);
 
   const applyServerData=useCallback((d:any)=>{
     if(d.tasks){
-      // Tasks that are 'done' go to archived immediately (don't trigger auto-archive effect)
       const active=(d.tasks as Task[]).filter(t=>t.status!=='done');
       const done=(d.tasks as Task[]).filter(t=>t.status==='done').map(t=>({...t,archivedAt:t.archivedAt??todayStr()}));
       setTasks(active);
@@ -2129,10 +2154,12 @@ export default function App() {
     });
     if(d.schedule) setSchedule(d.schedule);
     if(d.notes)    setNotes(d.notes);
+    // Mark local as up-to-date with server so we don't push stale data back
+    if(d._localUpdatedAt) setLocalUpdatedAt(d._localUpdatedAt);
     addToast('Đồng bộ thành công!','☁️');
-  },[setTasks,setHabits,setFinanceRaw,setSettings,setArchived,setSchedule,setNotes,addToast]);
+  },[setTasks,setHabits,setFinanceRaw,setSettings,setArchived,setSchedule,setNotes,setLocalUpdatedAt,addToast]);
 
-  const {syncing,pull}=useSupabaseSync(user,syncPayload,applyServerData,setUser);
+  const {syncing,pull}=useSupabaseSync(user,syncPayload,applyServerData,setUser,localUpdatedAt,setLocalUpdatedAt);
   const setFinance=useCallback((f:FinanceState)=>setFinanceRaw(f),[setFinanceRaw]);
 
   // Task done → earn reward (archive handled by useEffect above)
