@@ -76,6 +76,103 @@ function getISOWeek(d=new Date()):string {
   return `${date.getFullYear()}-W${String(wn).padStart(2,'0')}`;
 }
 
+// ─── Schema Migration ─────────────────────────────────────────────────────────
+// Runs once on startup to upgrade localStorage data from old versions.
+// Never deletes data — only fills in missing fields with safe defaults.
+function migrateLocalStorage() {
+  try {
+    // ── Habits ──
+    const rawHabits = localStorage.getItem('chance-habits');
+    if (rawHabits) {
+      const habits = JSON.parse(rawHabits) as any[];
+      let changed = false;
+      const migrated = habits.map((h: any) => {
+        const updates: any = {};
+        if (typeof h.weeklyStreak !== 'number') { updates.weeklyStreak = 0; changed = true; }
+        if (!h.lastResetWeek) { updates.lastResetWeek = getISOWeek(); changed = true; }
+        if (!Array.isArray(h.completed) || h.completed.length !== 7) {
+          updates.completed = Array(7).fill(false); changed = true;
+        }
+        if (typeof h.streak !== 'number') { updates.streak = 0; changed = true; }
+        return changed ? { ...h, ...updates } : h;
+      });
+      if (changed) localStorage.setItem('chance-habits', JSON.stringify(migrated));
+    }
+
+    // ── Tasks ──
+    const rawTasks = localStorage.getItem('chance-tasks');
+    if (rawTasks) {
+      const tasks = JSON.parse(rawTasks) as any[];
+      let changed = false;
+      const migrated = tasks.map((t: any) => {
+        const updates: any = {};
+        if (!Array.isArray(t.tags)) { updates.tags = []; changed = true; }
+        if (!t.createdAt) { updates.createdAt = t.deadline ?? todayStr(); changed = true; }
+        if (!t.category) { updates.category = 'Study'; changed = true; }
+        return changed ? { ...t, ...updates } : t;
+      });
+      if (changed) localStorage.setItem('chance-tasks', JSON.stringify(migrated));
+    }
+
+    // ── Archived ──
+    const rawArchived = localStorage.getItem('chance-archived');
+    if (rawArchived) {
+      const archived = JSON.parse(rawArchived) as any[];
+      let changed = false;
+      const migrated = archived.map((t: any) => {
+        const updates: any = {};
+        if (!Array.isArray(t.tags)) { updates.tags = []; changed = true; }
+        if (!t.archivedAt) { updates.archivedAt = todayStr(); changed = true; }
+        return changed ? { ...t, ...updates } : t;
+      });
+      if (changed) localStorage.setItem('chance-archived', JSON.stringify(migrated));
+    }
+
+    // ── Finance ──
+    const rawFin = localStorage.getItem('chance-finance');
+    if (rawFin) {
+      const fin = JSON.parse(rawFin) as any;
+      let changed = false;
+      if (typeof fin.rewardPerTask !== 'number') { fin.rewardPerTask = 10000; changed = true; }
+      if (!Array.isArray(fin.transactions)) { fin.transactions = []; changed = true; }
+      if (changed) localStorage.setItem('chance-finance', JSON.stringify(fin));
+    }
+
+    // ── Settings ──
+    const rawSettings = localStorage.getItem('chance-settings');
+    if (rawSettings) {
+      const s = JSON.parse(rawSettings) as any;
+      let changed = false;
+      if (!s.accentColor) { s.accentColor = 'black'; changed = true; }
+      if (!s.pomoDurations) { s.pomoDurations = {work:25,short:5,long:15}; changed = true; }
+      if (!Array.isArray(s.customCategories)) { s.customCategories = []; changed = true; }
+      if (changed) localStorage.setItem('chance-settings', JSON.stringify(s));
+    }
+
+    // ── Notes ──
+    const rawNotes = localStorage.getItem('chance-notes');
+    if (rawNotes) {
+      const notes = JSON.parse(rawNotes) as any[];
+      let changed = false;
+      const migrated = notes.map((n: any) => {
+        const updates: any = {};
+        if (!Array.isArray(n.tags)) { updates.tags = []; changed = true; }
+        if (!Array.isArray(n.blocks)) { updates.blocks = [{id:'b1',type:'text',content:n.content??''}]; changed = true; }
+        if (!n.color) { updates.color = '#FFFFFF'; changed = true; }
+        if (!n.createdAt) { updates.createdAt = todayStr(); changed = true; }
+        if (!n.updatedAt) { updates.updatedAt = todayStr(); changed = true; }
+        return changed ? { ...n, ...updates } : n;
+      });
+      if (changed) localStorage.setItem('chance-notes', JSON.stringify(migrated));
+    }
+  } catch(e) {
+    console.warn('[Migration] Error:', e);
+  }
+}
+
+// Run migration immediately (before React renders anything)
+migrateLocalStorage();
+
 // ─── Supabase helpers (no SDK needed — direct REST) ───────────────────────────
 const SB_URL = (import.meta as any).env?.VITE_SUPABASE_URL  ?? '';
 const SB_KEY = (import.meta as any).env?.VITE_SUPABASE_ANON ?? '';
@@ -1087,7 +1184,7 @@ function HabitItem({habit,onToggle,onDelete,onRename}:{habit:Habit;onToggle:(id:
   const [editing,setEditing]=useState(false);
   const [name,setName]=useState(habit.name);
   const commit=()=>{if(name.trim())onRename(habit.id,name.trim());setEditing(false);};
-  const thisWeekPct=Math.round((habit.streak/7)*100);
+  const thisWeekPct=Math.round(((habit.streak??0)/7)*100);
   return (
     <div className="bg-white p-4 rounded-[2rem] shadow-sm flex flex-col gap-3 group">
       <div className="flex justify-between items-start">
@@ -1097,8 +1194,8 @@ function HabitItem({habit,onToggle,onDelete,onRename}:{habit:Habit;onToggle:(id:
             :<h3 className="font-bold text-sm truncate">{habit.name}</h3>
           }
           <div className="flex items-center gap-2 mt-0.5">
-            <span className="text-[10px] font-bold text-zinc-400">{habit.streak}/7 ngày tuần này</span>
-            {habit.weeklyStreak>0&&<span className="text-[10px] font-bold text-orange-500">🔥 {habit.weeklyStreak} tuần</span>}
+            <span className="text-[10px] font-bold text-zinc-400">{(habit.streak??0)}/7 ngày tuần này</span>
+            {(habit.weeklyStreak??0)>0&&<span className="text-[10px] font-bold text-orange-500">🔥 {habit.weeklyStreak} tuần</span>}
           </div>
         </div>
         <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-all shrink-0">
@@ -1118,8 +1215,8 @@ function HabitItem({habit,onToggle,onDelete,onRename}:{habit:Habit;onToggle:(id:
         {DAY_SHORT.map((d,i)=>(
           <button key={i} onClick={()=>onToggle(habit.id,i)}
             className={cn('flex-1 h-9 rounded-xl flex items-center justify-center text-[9px] font-bold transition-all hover:scale-105 active:scale-95',
-              habit.completed[i]?'text-white':'bg-zinc-100 text-zinc-400 hover:bg-zinc-200')}
-            style={habit.completed[i]?{backgroundColor:'var(--ac)'}:{}}>
+              (habit.completed??[])[i]?'text-white':'bg-zinc-100 text-zinc-400 hover:bg-zinc-200')}
+            style={(habit.completed??[])[i]?{backgroundColor:'var(--ac)'}:{}}>
             {d}
           </button>
         ))}
@@ -1142,16 +1239,16 @@ function HabitTrackerPage({habits,setHabits}:{habits:Habit[];setHabits:(h:Habit[
   // Auto-reset completed[] when a new ISO week starts — streak/weeklyStreak preserved
   useEffect(()=>{
     const thisWeek=getISOWeek();
-    const needsReset=habits.some(h=>h.lastResetWeek!==thisWeek);
+    const needsReset=habits.some(h=>(h.lastResetWeek??'')!==thisWeek);
     if(!needsReset)return;
     setHabits(habits.map(h=>{
-      if(h.lastResetWeek===thisWeek)return h;
-      const hadAnyDone=h.completed.some(Boolean);
+      if((h.lastResetWeek??'')===thisWeek)return h;
+      const hadAnyDone=(h.completed??[]).some(Boolean);
       return{
         ...h,
         completed:Array(7).fill(false),
         streak:0,
-        weeklyStreak:hadAnyDone?h.weeklyStreak+1:0,
+        weeklyStreak:hadAnyDone?(h.weeklyStreak??0)+1:0,
         lastResetWeek:thisWeek,
       };
     }));
