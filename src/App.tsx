@@ -76,103 +76,6 @@ function getISOWeek(d=new Date()):string {
   return `${date.getFullYear()}-W${String(wn).padStart(2,'0')}`;
 }
 
-// ─── Schema Migration ─────────────────────────────────────────────────────────
-// Runs once on startup to upgrade localStorage data from old versions.
-// Never deletes data — only fills in missing fields with safe defaults.
-function migrateLocalStorage() {
-  try {
-    // ── Habits ──
-    const rawHabits = localStorage.getItem('chance-habits');
-    if (rawHabits) {
-      const habits = JSON.parse(rawHabits) as any[];
-      let changed = false;
-      const migrated = habits.map((h: any) => {
-        const updates: any = {};
-        if (typeof h.weeklyStreak !== 'number') { updates.weeklyStreak = 0; changed = true; }
-        if (!h.lastResetWeek) { updates.lastResetWeek = getISOWeek(); changed = true; }
-        if (!Array.isArray(h.completed) || h.completed.length !== 7) {
-          updates.completed = Array(7).fill(false); changed = true;
-        }
-        if (typeof h.streak !== 'number') { updates.streak = 0; changed = true; }
-        return changed ? { ...h, ...updates } : h;
-      });
-      if (changed) localStorage.setItem('chance-habits', JSON.stringify(migrated));
-    }
-
-    // ── Tasks ──
-    const rawTasks = localStorage.getItem('chance-tasks');
-    if (rawTasks) {
-      const tasks = JSON.parse(rawTasks) as any[];
-      let changed = false;
-      const migrated = tasks.map((t: any) => {
-        const updates: any = {};
-        if (!Array.isArray(t.tags)) { updates.tags = []; changed = true; }
-        if (!t.createdAt) { updates.createdAt = t.deadline ?? todayStr(); changed = true; }
-        if (!t.category) { updates.category = 'Study'; changed = true; }
-        return changed ? { ...t, ...updates } : t;
-      });
-      if (changed) localStorage.setItem('chance-tasks', JSON.stringify(migrated));
-    }
-
-    // ── Archived ──
-    const rawArchived = localStorage.getItem('chance-archived');
-    if (rawArchived) {
-      const archived = JSON.parse(rawArchived) as any[];
-      let changed = false;
-      const migrated = archived.map((t: any) => {
-        const updates: any = {};
-        if (!Array.isArray(t.tags)) { updates.tags = []; changed = true; }
-        if (!t.archivedAt) { updates.archivedAt = todayStr(); changed = true; }
-        return changed ? { ...t, ...updates } : t;
-      });
-      if (changed) localStorage.setItem('chance-archived', JSON.stringify(migrated));
-    }
-
-    // ── Finance ──
-    const rawFin = localStorage.getItem('chance-finance');
-    if (rawFin) {
-      const fin = JSON.parse(rawFin) as any;
-      let changed = false;
-      if (typeof fin.rewardPerTask !== 'number') { fin.rewardPerTask = 10000; changed = true; }
-      if (!Array.isArray(fin.transactions)) { fin.transactions = []; changed = true; }
-      if (changed) localStorage.setItem('chance-finance', JSON.stringify(fin));
-    }
-
-    // ── Settings ──
-    const rawSettings = localStorage.getItem('chance-settings');
-    if (rawSettings) {
-      const s = JSON.parse(rawSettings) as any;
-      let changed = false;
-      if (!s.accentColor) { s.accentColor = 'black'; changed = true; }
-      if (!s.pomoDurations) { s.pomoDurations = {work:25,short:5,long:15}; changed = true; }
-      if (!Array.isArray(s.customCategories)) { s.customCategories = []; changed = true; }
-      if (changed) localStorage.setItem('chance-settings', JSON.stringify(s));
-    }
-
-    // ── Notes ──
-    const rawNotes = localStorage.getItem('chance-notes');
-    if (rawNotes) {
-      const notes = JSON.parse(rawNotes) as any[];
-      let changed = false;
-      const migrated = notes.map((n: any) => {
-        const updates: any = {};
-        if (!Array.isArray(n.tags)) { updates.tags = []; changed = true; }
-        if (!Array.isArray(n.blocks)) { updates.blocks = [{id:'b1',type:'text',content:n.content??''}]; changed = true; }
-        if (!n.color) { updates.color = '#FFFFFF'; changed = true; }
-        if (!n.createdAt) { updates.createdAt = todayStr(); changed = true; }
-        if (!n.updatedAt) { updates.updatedAt = todayStr(); changed = true; }
-        return changed ? { ...n, ...updates } : n;
-      });
-      if (changed) localStorage.setItem('chance-notes', JSON.stringify(migrated));
-    }
-  } catch(e) {
-    console.warn('[Migration] Error:', e);
-  }
-}
-
-// Run migration immediately (before React renders anything)
-migrateLocalStorage();
-
 // ─── Supabase helpers (no SDK needed — direct REST) ───────────────────────────
 const SB_URL = (import.meta as any).env?.VITE_SUPABASE_URL  ?? '';
 const SB_KEY = (import.meta as any).env?.VITE_SUPABASE_ANON ?? '';
@@ -198,9 +101,8 @@ async function sbRefresh(refreshToken: string) {
   return sbFetch('/auth/v1/token?grant_type=refresh_token',{method:'POST',body:JSON.stringify({refresh_token:refreshToken})});
 }
 async function sbGetData(token: string, uid: string) {
-  const rows = await sbFetch(`/rest/v1/profiles?id=eq.${uid}&select=data,updated_at`,{},token);
-  const row = Array.isArray(rows)?rows[0]:null;
-  return row ? { data: row.data, updatedAt: row.updated_at } : null;
+  const rows = await sbFetch(`/rest/v1/profiles?id=eq.${uid}&select=data`,{},token);
+  return (Array.isArray(rows)?rows[0]?.data:null)??null;
 }
 async function sbSetData(token: string, uid: string, data: object) {
   await sbFetch('/rest/v1/profiles',{
@@ -213,7 +115,7 @@ async function sbSetData(token: string, uid: string, data: object) {
 // ─── Types ────────────────────────────────────────────────────────────────────
 type Priority = 'high'|'medium'|'low';
 type Status   = 'todo'|'in-progress'|'done';
-interface Task { id:string;title:string;status:Status;priority:Priority;category:string;deadline:string;createdAt:string;tags:string[];archivedAt?:string; }
+interface Task { id:string;title:string;status:Status;priority:Priority;category:string;deadline:string;createdAt:string;tags:string[];doneAt?:string;archivedAt?:string; }
 interface Habit{ id:string;name:string;streak:number;weeklyStreak:number;completed:boolean[];group:'study'|'life';lastResetWeek:string; }
 interface Transaction{ id:string;type:'income'|'expense'|'reward';amount:number;note:string;date:string;taskTitle?:string; }
 interface FinanceState{ rewardPerTask:number;transactions:Transaction[]; }
@@ -1062,6 +964,7 @@ const KCOLS:[{id:Status;title:string;color:string}]=([
 
 function KanbanPage({tasks,setTasks,archived,setArchived}:{tasks:Task[];setTasks:(t:Task[])=>void;archived:Task[];setArchived:(t:Task[])=>void}) {
   const dragId=useRef<string|null>(null);
+  const dragFrom=useRef<'board'|'archive'>('board');
   const today=new Date();
   const [cm,setCm]=useState({year:today.getFullYear(),month:today.getMonth()});
   const [selDay,setSelDay]=useState<number|null>(null);
@@ -1071,8 +974,25 @@ function KanbanPage({tasks,setTasks,archived,setArchived}:{tasks:Task[];setTasks
   const startOffset=(new Date(cm.year,cm.month,1).getDay()+6)%7;
   const deadlines=new Map<number,Task[]>();
   tasks.forEach(t=>{const d=new Date(t.deadline);if(d.getFullYear()===cm.year&&d.getMonth()===cm.month)deadlines.set(d.getDate(),[...(deadlines.get(d.getDate())??[]),t]);});
-  const move=(id:string,s:Status)=>setTasks(tasks.map(t=>t.id===id?{...t,status:s}:t));
+
+  const move=(id:string,s:Status)=>setTasks(tasks.map(t=>t.id===id?{...t,status:s,doneAt:s==='done'?(t.doneAt??todayStr()):undefined}:t));
+
+  // Restore a task from archive back to active board
+  const restoreFromArchive=(task:Task,targetStatus:Status='todo')=>{
+    setArchived(prev=>prev.filter(t=>t.id!==task.id));
+    setTasks(prev=>[{...task,status:targetStatus,doneAt:undefined,archivedAt:undefined},...prev.filter(t=>t.id!==task.id)]);
+  };
+
   const selTasks=selDay?(deadlines.get(selDay)??[]):[];
+
+  // Days until auto-archive for a done task (5 days from doneAt)
+  const daysUntilArchive=(task:Task):number=>{
+    if(!task.doneAt) return 5;
+    const doneDate=new Date(task.doneAt).getTime();
+    const archiveDate=doneDate+5*24*60*60*1000;
+    return Math.max(0,Math.ceil((archiveDate-Date.now())/86400000));
+  };
+
   return (
     <div className="p-6 md:p-8 min-h-screen overflow-y-auto no-scrollbar flex flex-col gap-7 pb-24 md:pb-10">
       <div className="flex justify-between items-center">
@@ -1081,29 +1001,54 @@ function KanbanPage({tasks,setTasks,archived,setArchived}:{tasks:Task[];setTasks
           <Archive className="w-3.5 h-3.5"/> Lưu trữ ({archived.length})
         </button>
       </div>
+
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         {KCOLS.map((col:any)=>(
           <div key={col.id} className={cn('p-5 rounded-[2rem] flex flex-col gap-3 min-h-[180px]',col.color)}
-            onDragOver={e=>e.preventDefault()} onDrop={()=>{if(dragId.current)move(dragId.current,col.id);dragId.current=null;}}>
+            onDragOver={e=>e.preventDefault()}
+            onDrop={()=>{
+              if(dragFrom.current==='archive'){
+                // Restore from archive to this column
+                const task=archived.find(t=>t.id===dragId.current);
+                if(task) restoreFromArchive(task,col.id);
+              } else {
+                if(dragId.current) move(dragId.current,col.id);
+              }
+              dragId.current=null;
+            }}>
             <div className="flex justify-between items-center">
               <h3 className="font-bold">{col.title}</h3>
               <span className="bg-white/70 px-2.5 py-0.5 rounded-lg text-xs font-bold">{tasks.filter(t=>t.status===col.id).length}</span>
             </div>
-            {tasks.filter(t=>t.status===col.id).map(task=>(
-              <div key={task.id} draggable onDragStart={()=>{dragId.current=task.id;}}
-                className="bg-white p-3.5 rounded-2xl shadow-sm border border-zinc-100 cursor-grab active:cursor-grabbing hover:shadow-md transition-all select-none">
-                <div className="flex justify-between items-start mb-2">
-                  <span className={cn('text-[9px] font-bold px-2 py-0.5 rounded-md uppercase',task.priority==='high'?'bg-red-100 text-red-600':task.priority==='medium'?'bg-yellow-100 text-yellow-700':'bg-zinc-100 text-zinc-600')}>{task.priority}</span>
-                  <GripVertical className="w-4 h-4 text-zinc-300"/>
+            {col.id==='done'&&tasks.filter(t=>t.status==='done').length>0&&(
+              <p className="text-[10px] text-emerald-600 font-semibold -mt-1">🕐 Tự chuyển lưu trữ sau 5 ngày hoàn thành</p>
+            )}
+            {tasks.filter(t=>t.status===col.id).map(task=>{
+              const daysLeft=col.id==='done'?daysUntilArchive(task):null;
+              return (
+                <div key={task.id} draggable onDragStart={()=>{dragId.current=task.id;dragFrom.current='board';}}
+                  className="bg-white p-3.5 rounded-2xl shadow-sm border border-zinc-100 cursor-grab active:cursor-grabbing hover:shadow-md transition-all select-none">
+                  <div className="flex justify-between items-start mb-2">
+                    <span className={cn('text-[9px] font-bold px-2 py-0.5 rounded-md uppercase',task.priority==='high'?'bg-red-100 text-red-600':task.priority==='medium'?'bg-yellow-100 text-yellow-700':'bg-zinc-100 text-zinc-600')}>{task.priority}</span>
+                    <GripVertical className="w-4 h-4 text-zinc-300"/>
+                  </div>
+                  <p className="text-sm font-bold leading-snug mb-2">{task.title}</p>
+                  {(task.tags??[]).length>0&&<div className="flex gap-1 flex-wrap mb-2">{(task.tags??[]).map(tag=><span key={tag} className="bg-zinc-100 text-zinc-500 px-1.5 py-0.5 rounded text-[9px] font-bold">{tag}</span>)}</div>}
+                  <div className="flex items-center justify-between gap-1">
+                    <div className="flex items-center gap-1 text-[9px] font-bold text-zinc-400"><Clock className="w-3 h-3"/>{task.deadline}</div>
+                    {daysLeft!==null&&(
+                      <span className={cn('text-[9px] font-bold px-1.5 py-0.5 rounded-lg',daysLeft===0?'bg-orange-100 text-orange-600':'bg-emerald-50 text-emerald-600')}>
+                        {daysLeft===0?'Lưu trữ hôm nay':`Lưu trữ sau ${daysLeft}n`}
+                      </span>
+                    )}
+                  </div>
                 </div>
-                <p className="text-sm font-bold leading-snug mb-2">{task.title}</p>
-                {(task.tags??[]).length>0&&<div className="flex gap-1 flex-wrap mb-2">{(task.tags??[]).map(tag=><span key={tag} className="bg-zinc-100 text-zinc-500 px-1.5 py-0.5 rounded text-[9px] font-bold">{tag}</span>)}</div>}
-                <div className="flex items-center gap-1 text-[9px] font-bold text-zinc-400"><Clock className="w-3 h-3"/>{task.deadline}</div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         ))}
       </div>
+
       <section className="bg-white rounded-[2rem] p-6 shadow-sm border border-zinc-100">
         <div className="flex justify-between items-center mb-5">
           <h2 className="text-xl font-bold">{MONTHS[cm.month]} {cm.year}</h2>
@@ -1148,29 +1093,82 @@ function KanbanPage({tasks,setTasks,archived,setArchived}:{tasks:Task[];setTasks
           )}
         </AnimatePresence>
       </section>
+
+      {/* Archive modal */}
       <AnimatePresence>
         {showArch&&(
           <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-[100] p-4">
-            <motion.div initial={{opacity:0,scale:0.95}} animate={{opacity:1,scale:1}} exit={{opacity:0,scale:0.95}} className="bg-white rounded-[2rem] p-7 w-full max-w-lg shadow-2xl max-h-[80vh] flex flex-col">
-              <div className="flex justify-between items-center mb-5 shrink-0">
-                <div><h2 className="text-xl font-bold flex items-center gap-2"><Archive className="w-5 h-5"/> Lưu trữ</h2><p className="text-xs text-zinc-400 mt-0.5">{archived.length} tasks</p></div>
+            <motion.div initial={{opacity:0,scale:0.95}} animate={{opacity:1,scale:1}} exit={{opacity:0,scale:0.95}} className="bg-white rounded-[2rem] p-7 w-full max-w-lg shadow-2xl max-h-[85vh] flex flex-col">
+              <div className="flex justify-between items-center mb-2 shrink-0">
+                <div>
+                  <h2 className="text-xl font-bold flex items-center gap-2"><Archive className="w-5 h-5"/> Lưu trữ</h2>
+                  <p className="text-xs text-zinc-400 mt-0.5">{archived.length} tasks · Kéo thả hoặc nhấn ↩ để khôi phục</p>
+                </div>
                 <button onClick={()=>setShowArch(false)} className="w-8 h-8 rounded-full bg-zinc-100 flex items-center justify-center"><X className="w-4 h-4"/></button>
               </div>
-              <div className="overflow-y-auto flex flex-col gap-2 no-scrollbar">
-                {archived.length===0?<p className="text-center text-zinc-400 py-8">Chưa có task nào.</p>:archived.map(t=>{
-                const daysLeft=t.archivedAt?30-Math.floor((Date.now()-new Date(t.archivedAt).getTime())/86400000):30;
-                return (
-                  <div key={t.id} className="flex items-center gap-3 p-3 bg-zinc-50 rounded-2xl group">
-                    <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0"/>
-                    <div className="flex-1 min-w-0">
-                      <p className="font-bold text-sm truncate line-through text-zinc-400">{t.title}</p>
-                      <p className="text-[10px] text-zinc-400">{t.category} · Xóa sau {Math.max(0,daysLeft)} ngày</p>
-                    </div>
+
+              {/* Drop zones for restoring */}
+              <div className="grid grid-cols-3 gap-2 mb-4 shrink-0">
+                {KCOLS.map((col:any)=>(
+                  <div key={col.id}
+                    onDragOver={e=>e.preventDefault()}
+                    onDrop={()=>{
+                      if(dragFrom.current==='archive'&&dragId.current){
+                        const task=archived.find(t=>t.id===dragId.current);
+                        if(task){restoreFromArchive(task,col.id);setShowArch(false);}
+                        dragId.current=null;
+                      }
+                    }}
+                    className={cn('border-2 border-dashed rounded-2xl p-3 text-center text-xs font-bold transition-colors',
+                      col.id==='todo'?'border-zinc-300 text-zinc-400 bg-zinc-50':col.id==='in-progress'?'border-blue-200 text-blue-400 bg-blue-50':'border-emerald-200 text-emerald-500 bg-emerald-50')}>
+                    <div className="text-base mb-0.5">{col.id==='todo'?'📋':col.id==='in-progress'?'⚡':'✅'}</div>
+                    {col.title}
                   </div>
-                );
-              })}
+                ))}
               </div>
-              {archived.length>0&&<button onClick={()=>{setArchived([]);setShowArch(false);}} className="mt-4 w-full py-3 bg-red-50 text-red-500 rounded-2xl text-sm font-bold hover:bg-red-100 shrink-0">Xóa toàn bộ lưu trữ</button>}
+
+              <div className="overflow-y-auto flex flex-col gap-2 no-scrollbar flex-1">
+                {archived.length===0?(
+                  <div className="text-center text-zinc-300 py-12">
+                    <Archive className="w-12 h-12 mx-auto mb-3 opacity-30"/>
+                    <p className="font-bold">Chưa có task nào được lưu trữ</p>
+                  </div>
+                ):archived.map(t=>{
+                  const daysLeft=t.archivedAt?30-Math.floor((Date.now()-new Date(t.archivedAt).getTime())/86400000):30;
+                  const urgent=daysLeft<=7;
+                  return (
+                    <div key={t.id}
+                      draggable
+                      onDragStart={()=>{dragId.current=t.id;dragFrom.current='archive';}}
+                      className="flex items-center gap-3 p-3.5 bg-zinc-50 rounded-2xl group hover:bg-zinc-100 transition-colors cursor-grab active:cursor-grabbing border border-zinc-100">
+                      <GripVertical className="w-4 h-4 text-zinc-300 shrink-0"/>
+                      <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0"/>
+                      <div className="flex-1 min-w-0">
+                        <p className="font-bold text-sm truncate text-zinc-600">{t.title}</p>
+                        <div className="flex items-center gap-2 mt-0.5">
+                          <span className="text-[10px] text-zinc-400">{t.category}</span>
+                          <span className={cn('text-[10px] font-bold',urgent?'text-orange-500':'text-zinc-400')}>
+                            {daysLeft<=0?'Xóa hôm nay':urgent?`Xóa sau ${daysLeft} ngày`:`Còn ${daysLeft} ngày`}
+                          </span>
+                        </div>
+                        {t.archivedAt&&<p className="text-[10px] text-zinc-300 mt-0.5">Lưu trữ: {t.archivedAt}</p>}
+                      </div>
+                      {/* Restore button */}
+                      <button
+                        onClick={()=>restoreFromArchive(t,'todo')}
+                        title="Khôi phục về To Do"
+                        className="w-8 h-8 bg-white rounded-xl flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all hover:bg-emerald-50 border border-zinc-100 shrink-0">
+                        <RotateCcw className="w-3.5 h-3.5 text-emerald-500"/>
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+              {archived.length>0&&(
+                <button onClick={()=>{setArchived([]);}} className="mt-4 w-full py-3 bg-red-50 text-red-500 rounded-2xl text-sm font-bold hover:bg-red-100 shrink-0 transition-colors">
+                  Xóa toàn bộ lưu trữ
+                </button>
+              )}
             </motion.div>
           </div>
         )}
@@ -1184,7 +1182,7 @@ function HabitItem({habit,onToggle,onDelete,onRename}:{habit:Habit;onToggle:(id:
   const [editing,setEditing]=useState(false);
   const [name,setName]=useState(habit.name);
   const commit=()=>{if(name.trim())onRename(habit.id,name.trim());setEditing(false);};
-  const thisWeekPct=Math.round(((habit.streak??0)/7)*100);
+  const thisWeekPct=Math.round((habit.streak/7)*100);
   return (
     <div className="bg-white p-4 rounded-[2rem] shadow-sm flex flex-col gap-3 group">
       <div className="flex justify-between items-start">
@@ -1194,8 +1192,8 @@ function HabitItem({habit,onToggle,onDelete,onRename}:{habit:Habit;onToggle:(id:
             :<h3 className="font-bold text-sm truncate">{habit.name}</h3>
           }
           <div className="flex items-center gap-2 mt-0.5">
-            <span className="text-[10px] font-bold text-zinc-400">{(habit.streak??0)}/7 ngày tuần này</span>
-            {(habit.weeklyStreak??0)>0&&<span className="text-[10px] font-bold text-orange-500">🔥 {habit.weeklyStreak} tuần</span>}
+            <span className="text-[10px] font-bold text-zinc-400">{habit.streak}/7 ngày tuần này</span>
+            {habit.weeklyStreak>0&&<span className="text-[10px] font-bold text-orange-500">🔥 {habit.weeklyStreak} tuần</span>}
           </div>
         </div>
         <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-all shrink-0">
@@ -1215,8 +1213,8 @@ function HabitItem({habit,onToggle,onDelete,onRename}:{habit:Habit;onToggle:(id:
         {DAY_SHORT.map((d,i)=>(
           <button key={i} onClick={()=>onToggle(habit.id,i)}
             className={cn('flex-1 h-9 rounded-xl flex items-center justify-center text-[9px] font-bold transition-all hover:scale-105 active:scale-95',
-              (habit.completed??[])[i]?'text-white':'bg-zinc-100 text-zinc-400 hover:bg-zinc-200')}
-            style={(habit.completed??[])[i]?{backgroundColor:'var(--ac)'}:{}}>
+              habit.completed[i]?'text-white':'bg-zinc-100 text-zinc-400 hover:bg-zinc-200')}
+            style={habit.completed[i]?{backgroundColor:'var(--ac)'}:{}}>
             {d}
           </button>
         ))}
@@ -1239,16 +1237,16 @@ function HabitTrackerPage({habits,setHabits}:{habits:Habit[];setHabits:(h:Habit[
   // Auto-reset completed[] when a new ISO week starts — streak/weeklyStreak preserved
   useEffect(()=>{
     const thisWeek=getISOWeek();
-    const needsReset=habits.some(h=>(h.lastResetWeek??'')!==thisWeek);
+    const needsReset=habits.some(h=>h.lastResetWeek!==thisWeek);
     if(!needsReset)return;
     setHabits(habits.map(h=>{
-      if((h.lastResetWeek??'')===thisWeek)return h;
-      const hadAnyDone=(h.completed??[]).some(Boolean);
+      if(h.lastResetWeek===thisWeek)return h;
+      const hadAnyDone=h.completed.some(Boolean);
       return{
         ...h,
         completed:Array(7).fill(false),
         streak:0,
-        weeklyStreak:hadAnyDone?(h.weeklyStreak??0)+1:0,
+        weeklyStreak:hadAnyDone?h.weeklyStreak+1:0,
         lastResetWeek:thisWeek,
       };
     }));
@@ -2098,16 +2096,15 @@ function useSupabaseSync(
   data: object,
   setData: (d:any)=>void,
   setUser: (u:AuthUser|null)=>void,
-  localUpdatedAt: string,
-  setLocalUpdatedAt: (v:string)=>void,
 ) {
   const [syncing,setSyncing]=useState(false);
-  const ready=useRef(false);       // true after first pull completes
-  const pushing=useRef(false);     // prevent concurrent pushes
+  // `ready` = initial pull done; don't push until then to avoid overwriting server data
+  const ready=useRef(false);
   const debRef=useRef<ReturnType<typeof setTimeout>|null>(null);
   const dataRef=useRef(data);
   dataRef.current=data;
 
+  // Refresh token if expired (<5 min left)
   const getValidToken=useCallback(async():Promise<string|null>=>{
     if(!user)return null;
     const fiveMin=5*60*1000;
@@ -2122,12 +2119,11 @@ function useSupabaseSync(
   },[user,setUser]);
 
   const push=useCallback(async(payload:object)=>{
-    if(!user||!SB_URL||!ready.current||pushing.current)return;
-    pushing.current=true;
+    if(!user||!SB_URL||!ready.current)return;
     try{
       const token=await getValidToken();
       if(token) await sbSetData(token,user.userId,payload);
-    }catch{}finally{pushing.current=false;}
+    }catch{}
   },[user,getValidToken]);
 
   const pull=useCallback(async()=>{
@@ -2136,53 +2132,32 @@ function useSupabaseSync(
     try{
       const token=await getValidToken();
       if(!token)return;
-      const result=await sbGetData(token,user.userId);
-
-      if(!result||!result.data){
-        // Server has no data → push local data up so it's not lost
-        const now=new Date().toISOString();
-        await sbSetData(token,user.userId,{...dataRef.current,_localUpdatedAt:now});
-        setLocalUpdatedAt(now);
-      } else {
-        const serverTs=result.updatedAt??new Date(0).toISOString();
-        const localTs=localUpdatedAt??new Date(0).toISOString();
-
-        if(serverTs>localTs){
-          // Server is newer → apply server data
-          setData(result.data);
-          setLocalUpdatedAt(serverTs);
-        } else {
-          // Local is newer (or equal) → push local up to server
-          await sbSetData(token,user.userId,dataRef.current);
-        }
-      }
-    }catch(e){
-      console.error('[Sync] pull error',e);
-    }finally{
+      const d=await sbGetData(token,user.userId);
+      if(d) setData(d);
+    }catch{}finally{
       setSyncing(false);
-      ready.current=true;
+      ready.current=true; // allow push after first pull
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[user,setData,getValidToken,setLocalUpdatedAt]);
+  },[user,setData,getValidToken]);
 
-  // Auto-pull when user changes
+  // Auto-pull on mount (or when user changes) — this is the KEY fix
   useEffect(()=>{
-    ready.current=false;
-    if(user&&SB_URL){pull();}
-    else{ready.current=true;}
+    ready.current=false; // reset on user change
+    if(user&&SB_URL){
+      pull();
+    } else {
+      ready.current=true; // no user → allow push immediately
+    }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[user?.userId]);
 
-  // Debounced push on data change — mark localUpdatedAt so we know local is now newest
+  // Debounced auto-push when data changes — only after pull is done
   useEffect(()=>{
     if(!user||!SB_URL)return;
-    const now=new Date().toISOString();
-    setLocalUpdatedAt(now);
     if(debRef.current)clearTimeout(debRef.current);
     debRef.current=setTimeout(()=>{if(ready.current)push(dataRef.current);},2000);
     return()=>{if(debRef.current)clearTimeout(debRef.current);};
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[data,user]);
+  },[data,user,push]);
 
   return{syncing,pull};
 }
@@ -2191,72 +2166,70 @@ function useSupabaseSync(
 export default function App() {
   const [activePage,setActivePage]=useState('home');
 
-  // Auth token — localStorage so user stays logged in
+  // Auth token: kept in localStorage so user stays logged in across browser sessions
   const [user,setUser]=useLocalStorage<AuthUser|null>('chance-user',null);
 
-  // All data uses localStorage as offline cache AND Supabase as cloud backup
-  // This means data survives page refreshes even without internet / Supabase
-  const [tasks,setTasks]         =useLocalStorage<Task[]>('chance-tasks',INIT_TASKS);
-  const [habits,setHabits]       =useLocalStorage<Habit[]>('chance-habits',INIT_HABITS);
-  const [finance,setFinanceRaw]  =useLocalStorage<FinanceState>('chance-finance',INIT_FINANCE);
-  const [settings,setSettings]   =useLocalStorage<AppSettings>('chance-settings',INIT_SETTINGS);
-  const [archived,setArchived]   =useLocalStorage<Task[]>('chance-archived',[]);
-  const [schedule,setSchedule]   =useLocalStorage<ScheduleEvent[]>('chance-schedule',INIT_SCHEDULE);
-  const [notes,setNotes]         =useLocalStorage<Note[]>('chance-notes',INIT_NOTES);
-  // Track when local data was last modified so we can compare with server
-  const [localUpdatedAt,setLocalUpdatedAt]=useLocalStorage<string>('chance-updated-at',new Date(0).toISOString());
+  // All app data lives in memory — Supabase is the single source of truth
+  const [tasks,setTasks]         =useServerState<Task[]>(INIT_TASKS);
+  const [habits,setHabits]       =useServerState<Habit[]>(INIT_HABITS);
+  const [finance,setFinanceRaw]  =useServerState<FinanceState>(INIT_FINANCE);
+  const [settings,setSettings]   =useServerState<AppSettings>(INIT_SETTINGS);
+  const [archived,setArchived]   =useServerState<Task[]>([]);
+  const [schedule,setSchedule]   =useServerState<ScheduleEvent[]>(INIT_SCHEDULE);
+  const [notes,setNotes]         =useServerState<Note[]>(INIT_NOTES);
   const {toasts,add:addToast}    =useToast();
 
-  // ── Auto-archive completed tasks + purge >30 days ──────────────────────────
-  // Skip on first mount — only fire when a new task is marked done by the user
-  const mountedRef=useRef(false);
-  const doneTasks=tasks.filter(t=>t.status==='done');
-  const doneCount=doneTasks.length;
+  // ── Stamp doneAt when task is first marked done ──────────────────────────────
   useEffect(()=>{
-    if(!mountedRef.current){mountedRef.current=true;return;}  // skip first render
-    if(doneCount===0)return;
-    const thirtyDaysAgo=new Date(Date.now()-30*24*60*60*1000).toISOString().split('T')[0];
-    const toArchive=doneTasks.map(t=>({...t,archivedAt:t.archivedAt??todayStr()}));
-    setTasks(prev=>prev.filter(t=>t.status!=='done'));
-    setArchived(prev=>{
-      const existingIds=new Set(prev.map(a=>a.id));
-      const newOnes=toArchive.filter(t=>!existingIds.has(t.id));
-      const purged=prev.filter(t=>(t.archivedAt??'9999')>=thirtyDaysAgo);
-      return [...newOnes,...purged];
-    });
+    const now=todayStr();
+    const needsStamp=tasks.filter(t=>t.status==='done'&&!t.doneAt);
+    if(needsStamp.length===0) return;
+    setTasks(prev=>prev.map(t=>t.status==='done'&&!t.doneAt?{...t,doneAt:now}:t));
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[doneCount]);
+  },[tasks.filter(t=>t.status==='done'&&!t.doneAt).length]);
+
+  // ── Auto-archive done tasks after 5 days, purge archived after 30 days ───────
+  useEffect(()=>{
+    const fiveDaysAgo=new Date(Date.now()-5*24*60*60*1000).toISOString().split('T')[0];
+    const thirtyDaysAgo=new Date(Date.now()-30*24*60*60*1000).toISOString().split('T')[0];
+    const readyToArchive=tasks.filter(t=>t.status==='done'&&t.doneAt&&t.doneAt<=fiveDaysAgo);
+    if(readyToArchive.length>0){
+      const archiveTime=todayStr();
+      setTasks(prev=>prev.filter(t=>!readyToArchive.find(r=>r.id===t.id)));
+      setArchived(prev=>{
+        const existingIds=new Set(prev.map(a=>a.id));
+        const newOnes=readyToArchive.filter(t=>!existingIds.has(t.id)).map(t=>({...t,archivedAt:t.archivedAt??archiveTime}));
+        const purged=prev.filter(t=>(t.archivedAt??'9999')>thirtyDaysAgo);
+        return [...newOnes,...purged];
+      });
+    } else {
+      // Still purge stale archived even if nothing new to archive
+      setArchived(prev=>{
+        const purged=prev.filter(t=>(t.archivedAt??'9999')>thirtyDaysAgo);
+        return purged.length===prev.length?prev:purged;
+      });
+    }
+  // Run once on mount and whenever done tasks change
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[tasks.filter(t=>t.status==='done').map(t=>t.doneAt).join(',')]);
 
   useAccentCSS(settings.accentColor);
 
   const allCategories=useMemo(()=>[...DEFAULT_CATEGORIES,...settings.customCategories.filter(c=>!DEFAULT_CATEGORIES.includes(c))],[settings.customCategories]);
-  const syncPayload=useMemo(()=>({tasks,habits,finance,settings,archived,schedule,notes,_localUpdatedAt:localUpdatedAt}),[tasks,habits,finance,settings,archived,schedule,notes,localUpdatedAt]);
+  const syncPayload=useMemo(()=>({tasks,habits,finance,settings,archived,schedule,notes}),[tasks,habits,finance,settings,archived,schedule,notes]);
 
   const applyServerData=useCallback((d:any)=>{
-    if(d.tasks){
-      const active=(d.tasks as Task[]).filter(t=>t.status!=='done');
-      const done=(d.tasks as Task[]).filter(t=>t.status==='done').map(t=>({...t,archivedAt:t.archivedAt??todayStr()}));
-      setTasks(active);
-      if(done.length>0)setArchived(prev=>{
-        const ids=new Set(prev.map(a=>a.id));
-        return[...done.filter(t=>!ids.has(t.id)),...prev];
-      });
-    }
+    if(d.tasks)    setTasks(d.tasks);
     if(d.habits)   setHabits(d.habits);
     if(d.finance)  setFinanceRaw(d.finance);
     if(d.settings) setSettings(d.settings);
-    if(d.archived) setArchived(prev=>{
-      const ids=new Set(prev.map(a=>a.id));
-      return[...(d.archived as Task[]).filter(t=>!ids.has(t.id)),...prev];
-    });
+    if(d.archived) setArchived(d.archived);
     if(d.schedule) setSchedule(d.schedule);
     if(d.notes)    setNotes(d.notes);
-    // Mark local as up-to-date with server so we don't push stale data back
-    if(d._localUpdatedAt) setLocalUpdatedAt(d._localUpdatedAt);
     addToast('Đồng bộ thành công!','☁️');
-  },[setTasks,setHabits,setFinanceRaw,setSettings,setArchived,setSchedule,setNotes,setLocalUpdatedAt,addToast]);
+  },[setTasks,setHabits,setFinanceRaw,setSettings,setArchived,setSchedule,setNotes,addToast]);
 
-  const {syncing,pull}=useSupabaseSync(user,syncPayload,applyServerData,setUser,localUpdatedAt,setLocalUpdatedAt);
+  const {syncing,pull}=useSupabaseSync(user,syncPayload,applyServerData,setUser);
   const setFinance=useCallback((f:FinanceState)=>setFinanceRaw(f),[setFinanceRaw]);
 
   // Task done → earn reward (archive handled by useEffect above)
