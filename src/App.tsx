@@ -1064,12 +1064,11 @@ function sortByDeadlinePriority(items:Task[]):Task[] {
 }
 
 
-const KCOLS: { id: Status; title: string; color: string }[] = [
-  {id:'todo',title:'To Do',color:'bg-zinc-50'},
-  {id:'in-progress',title:'In Progress',color:'bg-blue-50'},
-  {id:'done',title:'Done',color:'bg-emerald-50'},
+const KCOLS = [
+  { id: 'todo' as Status, title: 'To Do', color: 'bg-zinc-50' },
+  { id: 'in-progress' as Status, title: 'In Progress', color: 'bg-blue-50' },
+  { id: 'done' as Status, title: 'Done', color: 'bg-emerald-50' },
 ];
-
 function KanbanPage({tasks,setTasks,archived,setArchived}:{tasks:Task[];setTasks:(t:Task[])=>void;archived:Task[];setArchived:(t:Task[])=>void}) {
   const dragId=useRef<string|null>(null);
   const today=new Date();
