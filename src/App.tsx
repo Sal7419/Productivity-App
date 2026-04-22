@@ -1061,8 +1061,7 @@ function sortByDeadlinePriority(items:Task[]):Task[] {
     if(dl!==0) return dl;
     return (PRIORITY_ORDER[a.priority]??1)-(PRIORITY_ORDER[b.priority]??1);
   });
-}
-
+};
 
 const KCOLS = [
   { id: 'todo' as Status, title: 'To Do', color: 'bg-zinc-50' },
