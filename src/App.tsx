@@ -1064,6 +1064,7 @@ function sortByDeadlinePriority(items:Task[]):Task[] {
 }
 
 
+const KCOLS:[{id:Status;title:string;color:string}]=([
   {id:'todo',title:'To Do',color:'bg-zinc-50'},
   {id:'in-progress',title:'In Progress',color:'bg-blue-50'},
   {id:'done',title:'Done',color:'bg-emerald-50'},
