@@ -1051,7 +1051,7 @@ function TaskListPage({tasks,setTasks,categories,onTaskDone,onTaskUndo}:{
       </AnimatePresence>
     </div>
   );
-}
+};
 
 // ─── Kanban ───────────────────────────────────────────────────────────────────
 const PRIORITY_ORDER:Record<string,number>={high:0,medium:1,low:2};
