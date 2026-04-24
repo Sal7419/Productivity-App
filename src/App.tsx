@@ -16,7 +16,7 @@ import {
   LogIn, LogOut, User, Hash, RefreshCw, Pencil, Check,
   ArrowUpCircle, ArrowDownCircle, LayoutGrid, List,
   StickyNote, AlignLeft, CheckSquare, ListOrdered,
-  RotateCcw as Reset, TrendingUp, Calendar,
+  TrendingUp, Calendar,
 } from 'lucide-react';
 import {
   AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell,
@@ -1964,7 +1964,7 @@ function StatisticsPage({tasks,habits,finance,onReset}:{tasks:Task[];habits:Habi
       <header className="flex justify-between items-start">
         <div><h1 className="text-3xl md:text-4xl font-bold mb-1">Analytics</h1><p className="text-zinc-400 text-sm">Tự động cập nhật từ tất cả trang.</p></div>
         <button onClick={()=>setShowConfirm(true)} className="flex items-center gap-2 px-4 py-2.5 bg-red-50 text-red-500 rounded-2xl font-bold text-sm hover:bg-red-100 transition-colors shrink-0">
-          <Reset className="w-4 h-4"/>Reset
+          <RotateCcw className="w-4 h-4"/>Reset
         </button>
       </header>
 
