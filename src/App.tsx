@@ -2409,8 +2409,7 @@ function useSupabaseSync(
   return{syncing,pull:()=>pull(false)};
 }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[data,user]);
-
+  },[data,user];
   return{syncing,pull};
 }
 
