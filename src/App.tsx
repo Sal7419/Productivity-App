@@ -1430,80 +1430,184 @@ function EventModal({event,onSave,onDelete,onClose}:{event:ScheduleEvent|null;on
 }
 
 function SchedulePage({events,setEvents}:{events:ScheduleEvent[];setEvents:(e:ScheduleEvent[])=>void}) {
-  const [viewMode,setViewMode]=useState<'grid'|'list'>('grid');
+  const [viewMode,setViewMode]=useState<'grid'|'list'|'month'>('grid');
   const [showAdd,setShowAdd]=useState(false);
   const [editEv,setEditEv]=useState<ScheduleEvent|null>(null);
   const [selDay,setSelDay]=useState(todayIndex());
+  const [calMonth,setCalMonth]=useState({year:new Date().getFullYear(),month:new Date().getMonth()});
   const scrollRef=useRef<HTMLDivElement>(null);
+  const today=new Date();
 
-  // Scroll to current hour on mount
+  // Scroll grid to current hour on mount
   useEffect(()=>{
     if(viewMode==='grid'&&scrollRef.current){
-      const h=new Date().getHours();
-      const top=Math.max(0,(h-1)*HOUR_H-40);
+      const h=today.getHours();
+      const top=Math.max(0,(h-1)*HOUR_H-60);
       scrollRef.current.scrollTo({top,behavior:'smooth'});
     }
   },[viewMode]);
 
   const eventsForDay=(day:number)=>events.filter(e=>e.days.includes(day)).sort((a,b)=>parseTime(a.startTime)-parseTime(b.startTime));
 
+  // For month view: get all events that occur on a specific day-of-week
+  const daysInCal=new Date(calMonth.year,calMonth.month+1,0).getDate();
+  const firstDayOfWeek=(new Date(calMonth.year,calMonth.month,1).getDay()+6)%7; // Mon=0
+  const MONTHS_VN=['Tháng 1','Tháng 2','Tháng 3','Tháng 4','Tháng 5','Tháng 6','Tháng 7','Tháng 8','Tháng 9','Tháng 10','Tháng 11','Tháng 12'];
+
+  // Get date string for a day number in current calMonth
+  const getDateForDay=(day:number)=>`${calMonth.year}-${String(calMonth.month+1).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
+  const getDayOfWeek=(day:number)=>(new Date(calMonth.year,calMonth.month,day).getDay()+6)%7; // Mon=0
+
+  // Build grid header: show actual Mon–Sun dates for the current viewed week in grid mode
+  const getThisWeekDates=()=>{
+    const todayDow=todayIndex();
+    const mondayOffset=todayDow;
+    const monday=new Date(today); monday.setDate(today.getDate()-mondayOffset);
+    return Array.from({length:7},(_,i)=>{
+      const d=new Date(monday); d.setDate(monday.getDate()+i);
+      return {dow:i, date:d.getDate(), month:d.getMonth()+1, full:d};
+    });
+  };
+  const weekDates=getThisWeekDates();
+
   return (
-    <div className="p-6 md:p-8 min-h-screen overflow-y-auto no-scrollbar pb-24 md:pb-10">
-      <header className="flex justify-between items-start mb-6">
+    <div className="p-4 md:p-8 min-h-screen overflow-y-auto no-scrollbar pb-24 md:pb-10">
+      <header className="flex justify-between items-start mb-5">
         <div>
-          <h1 className="text-3xl md:text-4xl font-bold tracking-tight mb-1">Thời Khóa Biểu</h1>
-          <p className="text-zinc-400 text-sm">{events.length} hoạt động lặp lại hàng tuần</p>
+          <h1 className="text-2xl md:text-4xl font-bold tracking-tight mb-1">Thời Khóa Biểu</h1>
+          <p className="text-zinc-400 text-sm">{events.length} hoạt động • Lặp lại hàng tuần</p>
         </div>
-        <div className="flex gap-2 items-center">
+        <div className="flex gap-2 items-center shrink-0">
           <div className="flex bg-zinc-100 p-1 rounded-2xl gap-1">
-            <button onClick={()=>setViewMode('grid')} className={cn('p-2 rounded-xl transition-all',viewMode==='grid'?'bg-white shadow-sm':'hover:bg-white/50')}><LayoutGrid className="w-4 h-4"/></button>
-            <button onClick={()=>setViewMode('list')} className={cn('p-2 rounded-xl transition-all',viewMode==='list'?'bg-white shadow-sm':'hover:bg-white/50')}><List className="w-4 h-4"/></button>
+            <button onClick={()=>setViewMode('month')} title="Tháng" className={cn('p-2 rounded-xl transition-all',viewMode==='month'?'bg-white shadow-sm':'hover:bg-white/50')}><Calendar className="w-4 h-4"/></button>
+            <button onClick={()=>setViewMode('grid')} title="Tuần" className={cn('p-2 rounded-xl transition-all',viewMode==='grid'?'bg-white shadow-sm':'hover:bg-white/50')}><LayoutGrid className="w-4 h-4"/></button>
+            <button onClick={()=>setViewMode('list')} title="Danh sách" className={cn('p-2 rounded-xl transition-all',viewMode==='list'?'bg-white shadow-sm':'hover:bg-white/50')}><List className="w-4 h-4"/></button>
           </div>
           <button onClick={()=>setShowAdd(true)} className="text-white px-4 py-2.5 rounded-2xl font-bold flex items-center gap-2 shadow-lg text-sm" style={{backgroundColor:'var(--ac)'}}><Plus className="w-4 h-4"/>Thêm</button>
         </div>
       </header>
 
-      {/* GRID VIEW */}
-      {viewMode==='grid'&&(
-        <div ref={scrollRef} className="overflow-auto" style={{maxHeight:'calc(100vh - 180px)',scrollBehavior:'smooth'}}>
-          <div style={{minWidth:'560px'}}>
-            <div className="flex sticky top-0 z-10 bg-bg-chance pb-1 pt-0" style={{paddingLeft:'44px'}}>
-              {DAY_SHORT.map((d,i)=>(
-                <div key={d} className={cn('flex-1 text-center text-xs font-bold py-2 rounded-xl mx-0.5',i===todayIndex()?'bg-black text-white':'text-zinc-400')}>
-                  {d}
+      {/* ── MONTH VIEW (Google Calendar style) ── */}
+      {viewMode==='month'&&(
+        <div>
+          {/* Month navigation */}
+          <div className="flex justify-between items-center mb-4">
+            <h2 className="text-xl font-bold">{MONTHS_VN[calMonth.month]} {calMonth.year}</h2>
+            <div className="flex gap-2">
+              <button className="p-2 hover:bg-zinc-100 rounded-2xl transition-all" onClick={()=>setCalMonth(c=>{const d=new Date(c.year,c.month-1,1);return{year:d.getFullYear(),month:d.getMonth()};})}>
+                <ChevronLeft className="w-5 h-5"/>
+              </button>
+              <button className="px-3 py-1.5 text-xs font-bold bg-zinc-100 rounded-xl hover:bg-zinc-200 transition-all"
+                onClick={()=>setCalMonth({year:today.getFullYear(),month:today.getMonth()})}>Hôm nay</button>
+              <button className="p-2 hover:bg-zinc-100 rounded-2xl transition-all" onClick={()=>setCalMonth(c=>{const d=new Date(c.year,c.month+1,1);return{year:d.getFullYear(),month:d.getMonth()};})}>
+                <ChevronRight className="w-5 h-5"/>
+              </button>
+            </div>
+          </div>
+          {/* Day headers */}
+          <div className="grid grid-cols-7 mb-1">
+            {DAY_SHORT.map(d=><div key={d} className="text-center text-[10px] font-bold text-zinc-400 uppercase py-1">{d}</div>)}
+          </div>
+          {/* Calendar grid */}
+          <div className="grid grid-cols-7 gap-1">
+            {Array.from({length:firstDayOfWeek}).map((_,i)=><div key={`pre-${i}`} className="h-24 md:h-28 rounded-2xl bg-zinc-50/30"/>)}
+            {Array.from({length:daysInCal},(_,i)=>i+1).map(day=>{
+              const dow=getDayOfWeek(day);
+              const dayEvents=eventsForDay(dow);
+              const dateStr=getDateForDay(day);
+              const isToday=dateStr===todayStr();
+              const isWeekend=dow>=5;
+              return (
+                <div key={day} className={cn('h-24 md:h-28 p-1.5 rounded-2xl border flex flex-col transition-all',
+                  isToday?'bg-black border-black':'border-zinc-100 bg-white hover:bg-zinc-50',
+                  isWeekend&&!isToday?'bg-zinc-50/70 border-zinc-50':''
+                )}>
+                  <span className={cn('text-xs font-black mb-1 w-6 h-6 flex items-center justify-center rounded-full',
+                    isToday?'text-white':'text-zinc-600')}>{day}</span>
+                  <div className="flex flex-col gap-0.5 overflow-hidden flex-1">
+                    {dayEvents.slice(0,3).map(ev=>(
+                      <button key={ev.id} onClick={()=>setEditEv(ev)}
+                        className="text-left px-1.5 py-0.5 rounded-lg text-[9px] font-bold truncate leading-tight hover:brightness-95 transition-all"
+                        style={{backgroundColor:ev.color,color:'#374151'}}>
+                        {ev.startTime} {ev.title}
+                      </button>
+                    ))}
+                    {dayEvents.length>3&&(
+                      <span className="text-[9px] font-bold text-zinc-400 px-1.5">+{dayEvents.length-3} khác</span>
+                    )}
+                  </div>
                 </div>
+              );
+            })}
+          </div>
+          {/* Legend */}
+          <div className="mt-5 bg-white rounded-2xl p-4 border border-zinc-100">
+            <p className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-3">Tất cả hoạt động</p>
+            <div className="flex flex-wrap gap-2">
+              {events.map(ev=>(
+                <button key={ev.id} onClick={()=>setEditEv(ev)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold hover:brightness-95 transition-all"
+                  style={{backgroundColor:ev.color,color:'#374151'}}>
+                  <span>{ev.startTime}–{ev.endTime}</span>
+                  <span>{ev.title}</span>
+                  <span className="opacity-60">{ev.days.map(d=>DAY_SHORT[d]).join(',')}</span>
+                </button>
               ))}
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── GRID VIEW (weekly, with actual dates) ── */}
+      {viewMode==='grid'&&(
+        <div ref={scrollRef} className="overflow-auto rounded-2xl" style={{maxHeight:'calc(100vh - 200px)',scrollBehavior:'smooth'}}>
+          <div style={{minWidth:'480px'}}>
+            {/* Sticky header with actual dates */}
+            <div className="flex sticky top-0 z-10 bg-white/95 backdrop-blur-sm border-b border-zinc-100 pb-1" style={{paddingLeft:'44px'}}>
+              {weekDates.map(({dow,date,month,full})=>{
+                const isToday=full.toDateString()===today.toDateString();
+                return (
+                  <div key={dow} className="flex-1 text-center py-2 mx-0.5">
+                    <div className={cn('text-[9px] font-bold uppercase tracking-wide mb-0.5',isToday?'text-black':'text-zinc-400')}>{DAY_SHORT[dow]}</div>
+                    <div className={cn('w-7 h-7 mx-auto flex items-center justify-center rounded-full text-sm font-black transition-all',
+                      isToday?'bg-black text-white':'text-zinc-600')}>
+                      {date}
+                    </div>
+                    {month!==today.getMonth()+1&&<div className="text-[8px] text-zinc-300">/{month}</div>}
+                  </div>
+                );
+              })}
+            </div>
+            {/* Time grid */}
             <div className="flex">
               <div className="shrink-0" style={{width:'44px'}}>
                 {HOURS.map(h=>(
-                  <div key={h} style={{height:`${HOUR_H}px`}} className="flex items-start justify-end pr-2 border-t border-zinc-100 first:border-t-0">
-                    <span className="text-[10px] font-bold text-zinc-400 -translate-y-2">{String(h).padStart(2,'0')}:00</span>
+                  <div key={h} style={{height:`${HOUR_H}px`}} className="flex items-start justify-end pr-2 border-t border-zinc-100/80">
+                    <span className="text-[9px] font-bold text-zinc-400 -translate-y-2 select-none">{String(h).padStart(2,'0')}</span>
                   </div>
                 ))}
               </div>
-              <div className="flex-1 grid gap-0.5" style={{gridTemplateColumns:'repeat(7,1fr)'}}>
-                {[0,1,2,3,4,5,6].map(day=>{
-                  const nowH=new Date();
-                  const nowTop=(nowH.getHours()*60+nowH.getMinutes())/60*HOUR_H;
-                  const isToday=day===todayIndex();
+              <div className="flex-1 grid" style={{gridTemplateColumns:'repeat(7,1fr)'}}>
+                {weekDates.map(({dow,full})=>{
+                  const isToday=full.toDateString()===today.toDateString();
+                  const nowTop=(today.getHours()*60+today.getMinutes())/60*HOUR_H;
                   return (
-                    <div key={day} className="relative bg-zinc-50/50 rounded-xl border border-zinc-100" style={{height:`${END_H*HOUR_H}px`}}>
+                    <div key={dow} className={cn('relative border-l border-zinc-100/80 first:border-l-0',isToday?'bg-blue-50/20':'')} style={{height:`${END_H*HOUR_H}px`}}>
                       {HOURS.map(h=><div key={h} style={{top:`${h*HOUR_H}px`}} className="absolute left-0 right-0 border-t border-zinc-100/60"/>)}
                       {isToday&&(
-                        <div className="absolute left-0 right-0 z-10 flex items-center" style={{top:`${nowTop}px`}}>
-                          <div className="w-2 h-2 rounded-full bg-red-500 shrink-0 -ml-1"/>
+                        <div className="absolute left-0 right-0 z-20 flex items-center pointer-events-none" style={{top:`${nowTop}px`}}>
+                          <div className="w-2.5 h-2.5 rounded-full bg-red-500 shrink-0 -ml-1.5 shadow"/>
                           <div className="flex-1 h-px bg-red-400"/>
                         </div>
                       )}
-                      {eventsForDay(day).map(ev=>{
+                      {eventsForDay(dow).map(ev=>{
                         const top=eventTop(ev),height=eventHeight(ev);
                         return (
-                          <div key={ev.id} title={`${ev.title}\n${ev.startTime}–${ev.endTime}`} onClick={()=>setEditEv(ev)}
-                            className="absolute left-0.5 right-0.5 rounded-lg px-1 py-0.5 cursor-pointer hover:brightness-95 overflow-hidden"
-                            style={{top:`${top}px`,height:`${Math.max(height,18)}px`,backgroundColor:ev.color}}>
+                          <div key={ev.id} onClick={()=>setEditEv(ev)}
+                            className="absolute left-0.5 right-0.5 rounded-lg px-1 py-0.5 cursor-pointer hover:brightness-95 overflow-hidden z-10"
+                            style={{top:`${top}px`,height:`${Math.max(height,20)}px`,backgroundColor:ev.color}}>
                             <p className="text-[9px] font-bold text-zinc-700 leading-tight truncate">{ev.title}</p>
-                            {height>26&&<p className="text-[8px] text-zinc-500">{ev.startTime}</p>}
+                            {height>28&&<p className="text-[8px] text-zinc-500">{ev.startTime}</p>}
                           </div>
                         );
                       })}
@@ -1516,7 +1620,7 @@ function SchedulePage({events,setEvents}:{events:ScheduleEvent[];setEvents:(e:Sc
         </div>
       )}
 
-      {/* LIST VIEW */}
+      {/* ── LIST VIEW ── */}
       {viewMode==='list'&&(
         <div>
           <div className="flex gap-2 mb-5 overflow-x-auto no-scrollbar pb-1">
@@ -1527,11 +1631,11 @@ function SchedulePage({events,setEvents}:{events:ScheduleEvent[];setEvents:(e:Sc
           <h2 className="font-bold text-zinc-500 text-sm mb-3 uppercase tracking-widest">{DAY_FULL[selDay]}</h2>
           <div className="flex flex-col gap-3">
             {eventsForDay(selDay).length===0?(
-              <div className="text-center py-12 text-zinc-300"><CalendarDays className="w-12 h-12 mx-auto mb-3 opacity-30"/><p className="font-bold">Không có hoạt động nào</p><p className="text-sm mt-1">Nhấn + để thêm hoạt động lặp lại</p></div>
+              <div className="text-center py-12 text-zinc-300"><CalendarDays className="w-12 h-12 mx-auto mb-3 opacity-30"/><p className="font-bold">Không có hoạt động nào</p><p className="text-sm mt-1">Nhấn + để thêm</p></div>
             ):eventsForDay(selDay).map(ev=>(
               <motion.div key={ev.id} layout initial={{opacity:0,y:8}} animate={{opacity:1,y:0}}
                 className="flex items-center gap-4 p-4 rounded-2xl cursor-pointer hover:opacity-90 transition-all" style={{backgroundColor:ev.color}} onClick={()=>setEditEv(ev)}>
-                <div className="w-14 shrink-0 text-center">
+                <div className="w-16 shrink-0 text-center">
                   <p className="text-xs font-black text-zinc-700">{ev.startTime}</p>
                   <p className="text-[10px] text-zinc-500">{ev.endTime}</p>
                 </div>
@@ -2205,11 +2309,15 @@ function useSupabaseSync(
   setLocalUpdatedAt: (v:string)=>void,
 ) {
   const [syncing,setSyncing]=useState(false);
-  const ready=useRef(false);       // true after first pull completes
-  const pushing=useRef(false);     // prevent concurrent pushes
+  const ready=useRef(false);
+  const pushing=useRef(false);
+  const pulledOnce=useRef(false); // did we complete at least one pull this session?
   const debRef=useRef<ReturnType<typeof setTimeout>|null>(null);
   const dataRef=useRef(data);
   dataRef.current=data;
+  // Snapshot of localUpdatedAt at pull time (avoid stale closure)
+  const localTsRef=useRef(localUpdatedAt);
+  localTsRef.current=localUpdatedAt;
 
   const getValidToken=useCallback(async():Promise<string|null>=>{
     if(!user)return null;
@@ -2230,10 +2338,11 @@ function useSupabaseSync(
     try{
       const token=await getValidToken();
       if(token) await sbSetData(token,user.userId,payload);
-    }catch{}finally{pushing.current=false;}
+    }catch(e){console.error('[Sync] push error',e);}
+    finally{pushing.current=false;}
   },[user,getValidToken]);
 
-  const pull=useCallback(async()=>{
+  const pull=useCallback(async(forcePull=false)=>{
     if(!user||!SB_URL)return;
     setSyncing(true);
     try{
@@ -2242,20 +2351,21 @@ function useSupabaseSync(
       const result=await sbGetData(token,user.userId);
 
       if(!result||!result.data){
-        // Server has no data → push local data up so it's not lost
+        // Server empty → push local data up
         const now=new Date().toISOString();
         await sbSetData(token,user.userId,{...dataRef.current,_localUpdatedAt:now});
         setLocalUpdatedAt(now);
       } else {
         const serverTs=result.updatedAt??new Date(0).toISOString();
-        const localTs=localUpdatedAt??new Date(0).toISOString();
+        // Use ref so we read the true current value, not stale closure
+        const localTs=localTsRef.current??new Date(0).toISOString();
 
-        if(serverTs>localTs){
-          // Server is newer → apply server data
+        // Force pull = first session load on a new device (localTs may be wrong)
+        if(forcePull || serverTs>localTs){
           setData(result.data);
           setLocalUpdatedAt(serverTs);
         } else {
-          // Local is newer (or equal) → push local up to server
+          // Local is genuinely newer → push up
           await sbSetData(token,user.userId,dataRef.current);
         }
       }
@@ -2264,26 +2374,40 @@ function useSupabaseSync(
     }finally{
       setSyncing(false);
       ready.current=true;
+      pulledOnce.current=true;
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   },[user,setData,getValidToken,setLocalUpdatedAt]);
 
-  // Auto-pull when user changes
+  // Auto-pull on login/mount — force-pull on first session (new device has stale localTs)
   useEffect(()=>{
     ready.current=false;
-    if(user&&SB_URL){pull();}
-    else{ready.current=true;}
+    pulledOnce.current=false;
+    if(user&&SB_URL){
+      // forcePull=true: always trust server on first load of a session
+      pull(true);
+    } else {
+      ready.current=true;
+    }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[user?.userId]);
 
-  // Debounced push on data change — mark localUpdatedAt so we know local is now newest
+  // Debounced push — ONLY after pull has completed (ready.current && pulledOnce.current)
   useEffect(()=>{
     if(!user||!SB_URL)return;
-    const now=new Date().toISOString();
-    setLocalUpdatedAt(now);
     if(debRef.current)clearTimeout(debRef.current);
-    debRef.current=setTimeout(()=>{if(ready.current)push(dataRef.current);},2000);
+    debRef.current=setTimeout(()=>{
+      if(ready.current&&pulledOnce.current){
+        const now=new Date().toISOString();
+        setLocalUpdatedAt(now);
+        push({...dataRef.current,_localUpdatedAt:now});
+      }
+    },2500);
     return()=>{if(debRef.current)clearTimeout(debRef.current);};
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[data,user?.userId]);
+
+  return{syncing,pull:()=>pull(false)};
+}
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[data,user]);
 
