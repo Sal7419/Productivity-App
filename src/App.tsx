@@ -219,7 +219,7 @@ interface Transaction{ id:string;type:'income'|'expense'|'reward';amount:number;
 interface FinanceState{ rewardPerTask:number;transactions:Transaction[]; }
 interface AuthUser{ email:string;token:string;userId:string;refreshToken:string;expiresAt:number; }
 interface AppSettings{ accentColor:string;pomoDurations:{work:number;short:number;long:number};customCategories:string[]; }
-interface ScheduleEvent{ id:string;title:string;startTime:string;endTime:string;days:number[];color:string;note:string; }
+interface ScheduleEvent{ id:string;title:string;startTime:string;endTime:string;days:number[];color:string;note:string;repeatMode?:'weekly'|'dates';specificDates?:string[]; }
 type NoteBlockType='text'|'checkbox'|'bullet';
 interface NoteBlock{ id:string;type:NoteBlockType;content:string;checked?:boolean; }
 interface Note{ id:string;title:string;blocks:NoteBlock[];tags:string[];createdAt:string;updatedAt:string;color:string; }
@@ -1391,38 +1391,196 @@ function EventModal({event,onSave,onDelete,onClose}:{event:ScheduleEvent|null;on
   const [days,setDays]=useState<number[]>(event?.days??[0,1,2,3,4]);
   const [color,setColor]=useState(event?.color??'#D0E7FF');
   const [note,setNote]=useState(event?.note??'');
+  const [repeatMode,setRepeatMode]=useState<'weekly'|'dates'>(event?.repeatMode??'weekly');
+  const [specificDates,setSpecificDates]=useState<string[]>(event?.specificDates??[]);
+
+  const todayD=new Date();
+  const [calView,setCalView]=useState({year:todayD.getFullYear(),month:todayD.getMonth()});
+
   const toggleDay=(d:number)=>setDays(p=>p.includes(d)?p.filter(x=>x!==d):[...p,d].sort());
+  const toggleDate=(iso:string)=>setSpecificDates(p=>p.includes(iso)?p.filter(x=>x!==iso):[...p,iso].sort());
+
+  const calDaysInMonth=new Date(calView.year,calView.month+1,0).getDate();
+  const calStartOffset=(new Date(calView.year,calView.month,1).getDay()+6)%7;
+  const MONTHS_SHORT=['Th1','Th2','Th3','Th4','Th5','Th6','Th7','Th8','Th9','Th10','Th11','Th12'];
+  const toISO=(y:number,m:number,d:number)=>`${y}-${String(m+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+  const todayISO=toISO(todayD.getFullYear(),todayD.getMonth(),todayD.getDate());
+
   const submit=()=>{
-    if(!title.trim()||days.length===0)return;
-    onSave({id:event?.id??Date.now().toString(),title:title.trim(),startTime,endTime,days,color,note:note.trim()});
+    if(!title.trim()) return;
+    if(repeatMode==='weekly'&&days.length===0) return;
+    if(repeatMode==='dates'&&specificDates.length===0) return;
+    onSave({
+      id:event?.id??Date.now().toString(),
+      title:title.trim(),startTime,endTime,
+      days:repeatMode==='weekly'?days:[],
+      color,note:note.trim(),
+      repeatMode,
+      specificDates:repeatMode==='dates'?specificDates:[],
+    });
   };
+
   return (
     <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-end md:items-center justify-center z-[100] p-4">
-      <motion.div initial={{opacity:0,y:40}} animate={{opacity:1,y:0}} exit={{opacity:0,y:40}} className="bg-white rounded-[2rem] p-7 w-full max-w-md shadow-2xl">
-        <div className="flex justify-between items-center mb-5"><h2 className="text-lg font-bold">{event?'Chỉnh sửa hoạt động':'Thêm hoạt động'}</h2><button onClick={onClose} className="w-8 h-8 rounded-full bg-zinc-100 flex items-center justify-center"><X className="w-4 h-4"/></button></div>
+      <motion.div initial={{opacity:0,y:40}} animate={{opacity:1,y:0}} exit={{opacity:0,y:40}}
+        className="bg-white rounded-[2rem] p-6 w-full max-w-md shadow-2xl max-h-[92vh] overflow-y-auto no-scrollbar">
+        {/* Header */}
+        <div className="flex justify-between items-center mb-5">
+          <h2 className="text-lg font-bold">{event?'Chỉnh sửa hoạt động':'Thêm hoạt động'}</h2>
+          <button onClick={onClose} className="w-8 h-8 rounded-full bg-zinc-100 flex items-center justify-center hover:bg-zinc-200"><X className="w-4 h-4"/></button>
+        </div>
+
         <div className="flex flex-col gap-4">
-          <input autoFocus type="text" placeholder="Tên hoạt động..." value={title} onChange={e=>setTitle(e.target.value)} className="w-full bg-zinc-50 border-2 border-zinc-100 rounded-2xl px-4 py-3 font-semibold outline-none focus:border-black"/>
+          {/* Title */}
+          <input autoFocus type="text" placeholder="Tên hoạt động..." value={title}
+            onChange={e=>setTitle(e.target.value)}
+            className="w-full bg-zinc-50 border-2 border-zinc-100 rounded-2xl px-4 py-3 font-semibold outline-none focus:border-black"/>
+
+          {/* Time */}
           <div className="grid grid-cols-2 gap-3">
-            <div><p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-2">Bắt đầu</p><input type="time" value={startTime} onChange={e=>setStartTime(e.target.value)} className="w-full bg-zinc-50 border-2 border-zinc-100 rounded-2xl px-3 py-2.5 font-bold outline-none focus:border-black"/></div>
-            <div><p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-2">Kết thúc</p><input type="time" value={endTime} onChange={e=>setEndTime(e.target.value)} className="w-full bg-zinc-50 border-2 border-zinc-100 rounded-2xl px-3 py-2.5 font-bold outline-none focus:border-black"/></div>
+            <div>
+              <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-2">Bắt đầu</p>
+              <input type="time" value={startTime} onChange={e=>setStartTime(e.target.value)}
+                className="w-full bg-zinc-50 border-2 border-zinc-100 rounded-2xl px-3 py-2.5 font-bold outline-none focus:border-black"/>
+            </div>
+            <div>
+              <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-2">Kết thúc</p>
+              <input type="time" value={endTime} onChange={e=>setEndTime(e.target.value)}
+                className="w-full bg-zinc-50 border-2 border-zinc-100 rounded-2xl px-3 py-2.5 font-bold outline-none focus:border-black"/>
+            </div>
           </div>
+
+          {/* Repeat section */}
           <div>
-            <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-2">Lặp lại (chọn ngày trong tuần)</p>
-            <div className="flex gap-1.5 flex-wrap">
-              {DAY_SHORT.map((d,i)=>(
-                <button key={i} onClick={()=>toggleDay(i)} className={cn('w-9 h-9 rounded-xl text-xs font-bold transition-all',days.includes(i)?'text-white':'bg-zinc-100 text-zinc-400')} style={days.includes(i)?{backgroundColor:'var(--ac)'}:{}}>{d}</button>
+            <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-2">Lặp lại</p>
+
+            {/* Mode tabs */}
+            <div className="flex bg-zinc-100 p-1 rounded-2xl gap-1 mb-3">
+              <button onClick={()=>setRepeatMode('weekly')}
+                className={cn('flex-1 py-2 rounded-xl text-xs font-bold transition-all',
+                  repeatMode==='weekly'?'bg-white shadow text-black':'text-zinc-500 hover:text-zinc-700')}>
+                📅 Theo thứ trong tuần
+              </button>
+              <button onClick={()=>setRepeatMode('dates')}
+                className={cn('flex-1 py-2 rounded-xl text-xs font-bold transition-all',
+                  repeatMode==='dates'?'bg-white shadow text-black':'text-zinc-500 hover:text-zinc-700')}>
+                🗓 Chọn ngày cụ thể
+              </button>
+            </div>
+
+            {/* Weekly: day-of-week buttons */}
+            {repeatMode==='weekly'&&(
+              <div className="flex gap-1.5 flex-wrap">
+                {DAY_SHORT.map((d,i)=>(
+                  <button key={i} onClick={()=>toggleDay(i)}
+                    className={cn('w-10 h-10 rounded-xl text-xs font-bold transition-all',
+                      days.includes(i)?'text-white shadow-sm':'bg-zinc-100 text-zinc-400 hover:bg-zinc-200')}
+                    style={days.includes(i)?{backgroundColor:'var(--ac)'}:{}}>
+                    {d}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {/* Specific dates: mini calendar */}
+            {repeatMode==='dates'&&(
+              <div className="bg-zinc-50 rounded-2xl p-4">
+                {/* Calendar header */}
+                <div className="flex justify-between items-center mb-3">
+                  <button
+                    onClick={()=>setCalView(v=>{const d=new Date(v.year,v.month-1,1);return{year:d.getFullYear(),month:d.getMonth()};})}
+                    className="w-7 h-7 bg-white rounded-xl flex items-center justify-center hover:bg-zinc-200 border border-zinc-200 transition-colors">
+                    <ChevronLeft className="w-3.5 h-3.5"/>
+                  </button>
+                  <span className="text-sm font-bold">{MONTHS_SHORT[calView.month]} {calView.year}</span>
+                  <button
+                    onClick={()=>setCalView(v=>{const d=new Date(v.year,v.month+1,1);return{year:d.getFullYear(),month:d.getMonth()};})}
+                    className="w-7 h-7 bg-white rounded-xl flex items-center justify-center hover:bg-zinc-200 border border-zinc-200 transition-colors">
+                    <ChevronRight className="w-3.5 h-3.5"/>
+                  </button>
+                </div>
+
+                {/* Weekday headers */}
+                <div className="grid grid-cols-7 mb-1">
+                  {['T2','T3','T4','T5','T6','T7','CN'].map(d=>(
+                    <div key={d} className="text-center text-[9px] font-bold text-zinc-400">{d}</div>
+                  ))}
+                </div>
+
+                {/* Days */}
+                <div className="grid grid-cols-7 gap-0.5">
+                  {Array.from({length:calStartOffset}).map((_,i)=><div key={`pre-${i}`}/>)}
+                  {Array.from({length:calDaysInMonth},(_,i)=>i+1).map(d=>{
+                    const iso=toISO(calView.year,calView.month,d);
+                    const selected=specificDates.includes(iso);
+                    const isToday=iso===todayISO;
+                    return (
+                      <button key={d} onClick={()=>toggleDate(iso)}
+                        className={cn('h-8 w-full rounded-xl text-xs font-bold transition-all flex items-center justify-center',
+                          selected?'text-white shadow-sm'
+                          :isToday?'bg-white border-2 font-black hover:brightness-95'
+                          :'text-zinc-600 hover:bg-white hover:shadow-sm')}
+                        style={selected?{backgroundColor:'var(--ac)'}:isToday?{borderColor:'var(--ac)',color:'var(--ac)'}:{}}>
+                        {d}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Selected dates chips */}
+                {specificDates.length>0&&(
+                  <div className="mt-3 pt-3 border-t border-zinc-200">
+                    <div className="flex justify-between items-center mb-1.5">
+                      <p className="text-[10px] font-bold text-zinc-500">Đã chọn {specificDates.length} ngày</p>
+                      <button onClick={()=>setSpecificDates([])} className="text-[10px] font-bold text-red-400 hover:text-red-600">Xóa hết</button>
+                    </div>
+                    <div className="flex flex-wrap gap-1 max-h-16 overflow-y-auto">
+                      {specificDates.sort().map(iso=>(
+                        <span key={iso} onClick={()=>toggleDate(iso)}
+                          className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-1 rounded-lg cursor-pointer hover:opacity-75 transition-opacity text-white"
+                          style={{backgroundColor:'var(--ac)'}}>
+                          {iso.slice(5).replace('-','/')}
+                          <X className="w-2.5 h-2.5"/>
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Color */}
+          <div>
+            <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-2">Màu</p>
+            <div className="flex gap-2 flex-wrap">
+              {SCHED_COLORS.map(c=>(
+                <button key={c.bg} onClick={()=>setColor(c.bg)} title={c.label}
+                  className={cn('w-8 h-8 rounded-full border-2 transition-all',color===c.bg?'border-black scale-110':'border-transparent hover:scale-105')}
+                  style={{backgroundColor:c.bg}}/>
               ))}
             </div>
           </div>
-          <div>
-            <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-2">Màu</p>
-            <div className="flex gap-2 flex-wrap">{SCHED_COLORS.map(c=><button key={c.bg} onClick={()=>setColor(c.bg)} title={c.label} className={cn('w-8 h-8 rounded-full border-2 transition-all',color===c.bg?'border-black scale-110':'border-transparent')} style={{backgroundColor:c.bg}}/>)}</div>
-          </div>
-          <input type="text" placeholder="Ghi chú (tùy chọn)..." value={note} onChange={e=>setNote(e.target.value)} className="w-full bg-zinc-50 border-2 border-zinc-100 rounded-2xl px-4 py-3 font-semibold text-sm outline-none focus:border-black"/>
+
+          {/* Note */}
+          <input type="text" placeholder="Ghi chú (tùy chọn)..." value={note}
+            onChange={e=>setNote(e.target.value)}
+            className="w-full bg-zinc-50 border-2 border-zinc-100 rounded-2xl px-4 py-3 font-semibold text-sm outline-none focus:border-black"/>
         </div>
+
+        {/* Actions */}
         <div className="flex gap-3 mt-5">
-          {event&&<button onClick={()=>onDelete(event.id)} className="w-11 h-11 bg-red-50 rounded-2xl flex items-center justify-center hover:bg-red-100 shrink-0"><Trash2 className="w-4 h-4 text-red-500"/></button>}
-          <button onClick={submit} className="flex-1 text-white py-3 rounded-2xl font-bold hover:opacity-90" style={{backgroundColor:'var(--ac)'}}>{event?'Lưu thay đổi':'Thêm hoạt động'}</button>
+          {event&&(
+            <button onClick={()=>onDelete(event.id)}
+              className="w-11 h-11 bg-red-50 rounded-2xl flex items-center justify-center hover:bg-red-100 shrink-0">
+              <Trash2 className="w-4 h-4 text-red-500"/>
+            </button>
+          )}
+          <button onClick={submit}
+            className="flex-1 text-white py-3 rounded-2xl font-bold hover:opacity-90 transition-opacity"
+            style={{backgroundColor:'var(--ac)'}}>
+            {event?'Lưu thay đổi':'Thêm hoạt động'}
+          </button>
         </div>
       </motion.div>
     </div>
@@ -1447,7 +1605,15 @@ function SchedulePage({events,setEvents}:{events:ScheduleEvent[];setEvents:(e:Sc
     }
   },[viewMode]);
 
-  const eventsForDay=(day:number)=>events.filter(e=>e.days.includes(day)).sort((a,b)=>parseTime(a.startTime)-parseTime(b.startTime));
+  const eventsForDay=(day:number)=>{
+    const wd=getThisWeekDates();
+    const wdEntry=wd.find(w=>w.dow===day);
+    const dateISO=wdEntry?`${wdEntry.full.getFullYear()}-${String(wdEntry.full.getMonth()+1).padStart(2,'0')}-${String(wdEntry.full.getDate()).padStart(2,'0')}`:null;
+    return events.filter(e=>{
+      if((e.repeatMode??'weekly')==='weekly') return e.days.includes(day);
+      return dateISO&&(e.specificDates??[]).includes(dateISO);
+    }).sort((a,b)=>parseTime(a.startTime)-parseTime(b.startTime));
+  };
 
   // For month view: get all events that occur on a specific day-of-week
   const daysInCal=new Date(calMonth.year,calMonth.month+1,0).getDate();
@@ -1513,8 +1679,11 @@ function SchedulePage({events,setEvents}:{events:ScheduleEvent[];setEvents:(e:Sc
             {Array.from({length:firstDayOfWeek}).map((_,i)=><div key={`pre-${i}`} className="h-24 md:h-28 rounded-2xl bg-zinc-50/30"/>)}
             {Array.from({length:daysInCal},(_,i)=>i+1).map(day=>{
               const dow=getDayOfWeek(day);
-              const dayEvents=eventsForDay(dow);
               const dateStr=getDateForDay(day);
+              const dayEvents=events.filter(e=>{
+                if((e.repeatMode??'weekly')==='weekly') return e.days.includes(dow);
+                return (e.specificDates??[]).includes(dateStr);
+              }).sort((a,b)=>parseTime(a.startTime)-parseTime(b.startTime));
               const isToday=dateStr===todayStr();
               const isWeekend=dow>=5;
               return (
